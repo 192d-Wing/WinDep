@@ -26,6 +26,8 @@ inventory.json
 # Go build artifacts
 /api/windep-api
 *.exe
+coverage.out
+coverage.txt
 
 # OS / editor cruft
 Thumbs.db

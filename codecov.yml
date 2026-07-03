@@ -1,0 +1,10 @@
+# Codecov config. Coverage is informational (non-blocking) for now.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+comment: false

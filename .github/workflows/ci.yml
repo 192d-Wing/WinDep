@@ -1,0 +1,68 @@
+name: ci
+
+# Go build/vet/test with coverage on BOTH shipped architectures (native runners,
+# no QEMU), plus a vulnerability scan. Codecov + SonarQube run once, on the primary
+# (amd64) leg. Secrets: CODECOV_TOKEN, SONAR_TOKEN (+ repo variable SONAR_HOST_URL
+# for a self-hosted SonarQube, e.g. Platform One).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            primary: true
+          - arch: arm64
+            runner: ubuntu-24.04-arm # native arm64 — no emulation
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # Sonar needs full history for blame / new-code
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+
+      - name: Vet
+        working-directory: api
+        run: go vet ./...
+
+      - name: Build
+        working-directory: api
+        run: go build ./...
+
+      - name: Test (race + coverage)
+        working-directory: api
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Vulnerability scan
+        working-directory: api
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      # --- once-only quality gates (primary/amd64 leg) ---
+      - name: Upload coverage to Codecov
+        if: ${{ matrix.primary }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: api/coverage.out
+          slug: 192d-Wing/WinDep
+
+      - name: SonarQube scan
+        if: ${{ matrix.primary }}
+        uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }} # unset -> SonarCloud
