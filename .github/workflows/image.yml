@@ -1,0 +1,78 @@
+name: image
+
+# Build the FIPS 140-3 API image on Iron Bank UBI10 for amd64 + arm64, then
+# assemble a multi-arch manifest. Requires repository secrets:
+#   IRONBANK_USER / IRONBANK_TOKEN   (registry1.dso.mil pull)
+#   REGISTRY_USER / REGISTRY_TOKEN   (target registry push)
+# arm64 builds here via QEMU emulation; use a native arm64 runner for speed.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag"
+        required: true
+        default: "0.1.0"
+
+env:
+  REGISTRY: ghcr.io/192d-wing
+  IMAGE: windep-api
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
+          - arch: arm64
+            base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 emulation)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Log in to Iron Bank
+        run: echo "${{ secrets.IRONBANK_TOKEN }}" | buildah login -u "${{ secrets.IRONBANK_USER }}" --password-stdin registry1.dso.mil
+
+      - name: Build (${{ matrix.arch }})
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE }}
+          tags: ${{ env.TAG }}-${{ matrix.arch }}
+          archs: ${{ matrix.arch }}
+          containerfiles: ./image/Containerfile
+          context: ./api
+          build-args: |
+            BASE_IMAGE=${{ matrix.base }}
+            VERSION=${{ env.TAG }}
+
+      - name: Push (${{ matrix.arch }})
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ env.IMAGE }}
+          tags: ${{ env.TAG }}-${{ matrix.arch }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to target registry
+        run: echo "${{ secrets.REGISTRY_TOKEN }}" | buildah login -u "${{ secrets.REGISTRY_USER }}" --password-stdin ghcr.io
+
+      - name: Assemble and push manifest
+        run: |
+          M="${REGISTRY}/${IMAGE}:${TAG}"
+          buildah manifest create "$M"
+          buildah manifest add "$M" "docker://${REGISTRY}/${IMAGE}:${TAG}-amd64"
+          buildah manifest add "$M" "docker://${REGISTRY}/${IMAGE}:${TAG}-arm64"
+          buildah manifest push --all "$M" "docker://$M"
