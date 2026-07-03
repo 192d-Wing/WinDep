@@ -43,6 +43,8 @@ and commits follow [Conventional Commits](https://www.conventionalcommits.org/en
   (`security-extended` queries), SHA-pinned.
 - **`SECURITY.md`** — private vulnerability reporting policy, disclosure timeline, and hardening notes.
 - **README badges** — CI, CodeQL, Codecov coverage, and Sonar quality gate (for-the-badge style).
+- **Dependabot** (`.github/dependabot.yml`) — weekly updates for Go modules, GitHub Actions (keeps
+  SHA pins current), and container base images, with conventional-commit prefixes.
 
 - **Interactive deploys now report** status and logs (previously only zero-touch/headless did).
 - **Throttled telemetry** — progress reports are debounced to every ≥5% (or completion), and
