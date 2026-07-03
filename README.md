@@ -1,5 +1,13 @@
 # WinDep — Windows 11 Deployment
 
+<!-- The Sonar badge assumes SonarCloud; for a self-hosted (Platform One) SonarQube,
+     change ?server= to your instance URL. -->
+[![CI](https://img.shields.io/github/actions/workflow/status/192d-Wing/WinDep/ci.yml?branch=main&style=for-the-badge&logo=github&label=CI)](https://github.com/192d-Wing/WinDep/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/192d-Wing/WinDep/codeql.yml?branch=main&style=for-the-badge&logo=github&label=CodeQL)](https://github.com/192d-Wing/WinDep/actions/workflows/codeql.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/192d-Wing/WinDep?style=for-the-badge&logo=codecov)](https://codecov.io/gh/192d-Wing/WinDep)
+[![Quality Gate](https://img.shields.io/sonar/quality_gate/192d-Wing_WinDep?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=Quality%20Gate)](https://sonarcloud.io/summary/new_code?id=192d-Wing_WinDep)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge)](LICENSE.md)
+
 A WinPE-based Windows 11 deployment solution with a **WPF UI** and **Zero-Touch Provisioning (ZTP)**.
 The same WinPE image (`boot.wim`) can be delivered two ways, and once running it behaves identically:
 
