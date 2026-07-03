@@ -1,0 +1,19 @@
+# k3s environment variables (BGP ASNs + anycast addresses + image).
+# Independent from the example overlay — a k3s edge site can run its own ASN/VIP.
+#
+# IMPORTANT: k3s ships its own ServiceLB (Klipper) and flannel CNI, both of which
+# conflict with Cilium LB IPAM + BGP. See platform/README.md for the required k3s
+# install flags (--disable=servicelb --disable=traefik --flannel-backend=none
+# --disable-kube-proxy) and the Cilium install values.
+apiVersion: windep.dev/v1
+kind: Variables
+metadata:
+  name: windep-vars
+  annotations:
+    config.kubernetes.io/local-config: "true"
+spec:
+  anycastIP: "10.20.100.10"
+  lbPoolCIDR: "10.20.100.0/24"
+  localASN: 65011
+  peerASN: 65010
+  peerAddress: "10.20.0.1/32"

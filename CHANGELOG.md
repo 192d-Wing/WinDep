@@ -19,8 +19,15 @@ and commits follow [Conventional Commits](https://www.conventionalcommits.org/en
   parameterizes the BGP ASNs and anycast addresses per environment (ASNs stay integers).
 - **Client log streaming** — `Send-ZtpLog` batches deploy log lines to `/api/log`; the WPF UI
   ships from its render loop and the headless path flushes in batches.
+- **k3s support** — a `platform/overlays/k3s/` overlay and a shared `components/anycast` Kustomize
+  component (replacements live in one place), with `platform/README.md` covering full-k8s vs k3s
+  bring-up (disabling Klipper ServiceLB / flannel / kube-proxy for Cilium).
 
 ### Changed
+
+- **API hardening** (code review) — bounded the per-pod debug map (eviction at capacity),
+  readiness now fails on SIGTERM with a drain delay before shutdown, health probes are excluded
+  from request metrics, and an optional `API_TOKEN` bearer gate protects `/api/*` (off by default).
 
 - **Interactive deploys now report** status and logs (previously only zero-touch/headless did).
 - **Throttled telemetry** — progress reports are debounced to every ≥5% (or completion), and

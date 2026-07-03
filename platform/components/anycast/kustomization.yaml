@@ -1,0 +1,67 @@
+# Reusable component: inject BGP ASNs and anycast addresses from an overlay's
+# vars.yaml (kind: Variables, name: windep-vars) into the Service and Cilium
+# resources. Each overlay supplies its own vars.yaml and includes this component,
+# so the replacement wiring lives in exactly one place.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+replacements:
+  # anycast VIP -> Service annotation
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.anycastIP
+    targets:
+      - select:
+          kind: Service
+          name: windep-api
+        fieldPaths:
+          - metadata.annotations.[io.cilium/lb-ipam-ips]
+
+  # LB pool CIDR -> CiliumLoadBalancerIPPool
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.lbPoolCIDR
+    targets:
+      - select:
+          kind: CiliumLoadBalancerIPPool
+          name: windep-anycast-pool
+        fieldPaths:
+          - spec.blocks.0.cidr
+
+  # localASN -> CiliumBGPPeeringPolicy (integer)
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.localASN
+    targets:
+      - select:
+          kind: CiliumBGPPeeringPolicy
+          name: windep-anycast-bgp
+        fieldPaths:
+          - spec.virtualRouters.0.localASN
+
+  # peerASN -> BGP neighbor (integer)
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.peerASN
+    targets:
+      - select:
+          kind: CiliumBGPPeeringPolicy
+          name: windep-anycast-bgp
+        fieldPaths:
+          - spec.virtualRouters.0.neighbors.0.peerASN
+
+  # peerAddress -> BGP neighbor
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.peerAddress
+    targets:
+      - select:
+          kind: CiliumBGPPeeringPolicy
+          name: windep-anycast-bgp
+        fieldPaths:
+          - spec.virtualRouters.0.neighbors.0.peerAddress
