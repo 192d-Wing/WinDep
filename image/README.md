@@ -64,5 +64,6 @@ podman build -f image/Containerfile \
 ## CI
 
 [`.github/workflows/image.yml`](../.github/workflows/image.yml) builds the amd64/arm64 **matrix**
-with Buildah and assembles the manifest list. It needs `IRONBANK_USER`/`IRONBANK_TOKEN` and target
-registry credentials as repository secrets, and self-hosted or emulated runners for arm64.
+on **native runners** (`ubuntu-24.04` / `ubuntu-24.04-arm`, no QEMU) with Buildah and assembles the
+manifest list. It needs repo secrets `REPO1_USER` / `REPO1` (Repo One / Iron Bank pull); the GHCR
+push uses the built-in `GITHUB_TOKEN`.

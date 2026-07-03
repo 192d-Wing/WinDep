@@ -2,7 +2,7 @@ name: image
 
 # Build the FIPS 140-3 API image on Iron Bank UBI10 for amd64 + arm64 using NATIVE
 # runners (no QEMU), then assemble a multi-arch manifest and push to GHCR.
-# Requires repository secrets IRONBANK_USER / IRONBANK_TOKEN (registry1.dso.mil pull).
+# Requires repository secrets REPO1_USER / REPO1 (registry1.dso.mil / Repo One pull).
 # GHCR push uses the built-in GITHUB_TOKEN.
 
 on:
@@ -37,13 +37,13 @@ jobs:
             runner: ubuntu-24.04-arm # native arm64 runner — no emulation
             base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Log in to Iron Bank
-        run: echo "${{ secrets.IRONBANK_TOKEN }}" | buildah login -u "${{ secrets.IRONBANK_USER }}" --password-stdin registry1.dso.mil
+      - name: Log in to Repo One (Iron Bank)
+        run: echo "${{ secrets.REPO1 }}" | buildah login -u "${{ secrets.REPO1_USER }}" --password-stdin registry1.dso.mil
 
       - name: Build (${{ matrix.arch }})
-        uses: redhat-actions/buildah-build@v2
+        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2
         with:
           image: ${{ env.IMAGE }}
           tags: ${{ env.TAG }}-${{ matrix.arch }}
@@ -55,7 +55,7 @@ jobs:
             VERSION=${{ env.TAG }}
 
       - name: Push (${{ matrix.arch }}) to GHCR
-        uses: redhat-actions/push-to-registry@v2
+        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2
         with:
           image: ${{ env.IMAGE }}
           tags: ${{ env.TAG }}-${{ matrix.arch }}
