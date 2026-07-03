@@ -1,10 +1,9 @@
 name: image
 
-# Build the FIPS 140-3 API image on Iron Bank UBI10 for amd64 + arm64, then
-# assemble a multi-arch manifest. Requires repository secrets:
-#   IRONBANK_USER / IRONBANK_TOKEN   (registry1.dso.mil pull)
-#   REGISTRY_USER / REGISTRY_TOKEN   (target registry push)
-# arm64 builds here via QEMU emulation; use a native arm64 runner for speed.
+# Build the FIPS 140-3 API image on Iron Bank UBI10 for amd64 + arm64 using NATIVE
+# runners (no QEMU), then assemble a multi-arch manifest and push to GHCR.
+# Requires repository secrets IRONBANK_USER / IRONBANK_TOKEN (registry1.dso.mil pull).
+# GHCR push uses the built-in GITHUB_TOKEN.
 
 on:
   push:
@@ -16,6 +15,10 @@ on:
         required: true
         default: "0.1.0"
 
+permissions:
+  contents: read
+  packages: write
+
 env:
   REGISTRY: ghcr.io/192d-wing
   IMAGE: windep-api
@@ -23,20 +26,18 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - arch: amd64
+            runner: ubuntu-24.04
             base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
           - arch: arm64
+            runner: ubuntu-24.04-arm # native arm64 runner — no emulation
             base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU (arm64 emulation)
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
 
       - name: Log in to Iron Bank
         run: echo "${{ secrets.IRONBANK_TOKEN }}" | buildah login -u "${{ secrets.IRONBANK_USER }}" --password-stdin registry1.dso.mil
@@ -53,21 +54,21 @@ jobs:
             BASE_IMAGE=${{ matrix.base }}
             VERSION=${{ env.TAG }}
 
-      - name: Push (${{ matrix.arch }})
+      - name: Push (${{ matrix.arch }}) to GHCR
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ env.IMAGE }}
           tags: ${{ env.TAG }}-${{ matrix.arch }}
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USER }}
-          password: ${{ secrets.REGISTRY_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   manifest:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - name: Log in to target registry
-        run: echo "${{ secrets.REGISTRY_TOKEN }}" | buildah login -u "${{ secrets.REGISTRY_USER }}" --password-stdin ghcr.io
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | buildah login -u "${{ github.actor }}" --password-stdin ghcr.io
 
       - name: Assemble and push manifest
         run: |
