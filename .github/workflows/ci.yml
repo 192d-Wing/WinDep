@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   build-test:
+    name: build-test (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
