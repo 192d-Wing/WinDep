@@ -1,0 +1,19 @@
+{
+  "_comment": "Fallback config served to any machine without a per-machine file. Copied and customized as config/machines/<SERIAL>.json for specific devices. All values here override the ztp.config.json 'defaults' baked into boot.wim.",
+
+  "mode": "zerotouch",
+  "targetDisk": "largest",
+  "computerName": "WKS-{SERIAL}",
+  "imageUrl": "https://deploy.jhics.org/images/install.wim",
+  "confirmWipe": false,
+
+  "unattend": {
+    "TIMEZONE": "Eastern Standard Time",
+    "LOCALADMINUSER": "localadmin",
+    "LOCALADMINPASS": "REPLACE-ME",
+    "JOINDOMAIN": "",
+    "DOMAINOU": "",
+    "DOMAINUSER": "",
+    "DOMAINPASS": ""
+  }
+}
