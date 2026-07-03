@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://deploy.jhics.org/schema/inventory.schema.json",
+  "title": "WinDep Machine Inventory",
+  "description": "Hardware/firmware inventory collected in WinPE before deployment and submitted to the policy engine (OPA) as the evaluation input.",
+  "type": "object",
+  "required": ["schemaVersion", "collectedAt", "system", "firmware", "security", "cpu", "memory", "storage", "network"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "1.0" },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "version": { "type": "string" },
+        "bootMethod": { "type": "string", "enum": ["usb", "network", "unknown"] },
+        "peArch": { "type": "string" }
+      }
+    },
+    "system": {
+      "type": "object",
+      "required": ["manufacturer", "model", "serial"],
+      "properties": {
+        "manufacturer": { "type": "string" },
+        "model": { "type": "string" },
+        "sku": { "type": ["string", "null"] },
+        "family": { "type": ["string", "null"] },
+        "serial": { "type": "string" },
+        "uuid": { "type": ["string", "null"] },
+        "assetTag": { "type": ["string", "null"] },
+        "chassisType": { "type": "string", "description": "Human-readable chassis (Desktop, Laptop, Tower, All-in-One, Virtual, ...)" },
+        "isVirtual": { "type": "boolean" }
+      }
+    },
+    "firmware": {
+      "type": "object",
+      "required": ["firmwareType", "biosVersion"],
+      "properties": {
+        "firmwareType": { "type": "string", "enum": ["UEFI", "BIOS", "unknown"] },
+        "biosVendor": { "type": ["string", "null"] },
+        "biosVersion": { "type": "string", "description": "SMBIOS BIOS version string (e.g. 1.28.0)" },
+        "biosReleaseDate": { "type": ["string", "null"], "format": "date-time" },
+        "smbiosVersion": { "type": ["string", "null"] },
+        "secureBoot": { "type": "string", "enum": ["on", "off", "unknown"] }
+      }
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "tpmPresent": { "type": "boolean" },
+        "tpmVersion": { "type": ["string", "null"], "description": "e.g. 2.0, 1.2, or null" },
+        "tpmEnabled": { "type": ["boolean", "null"] },
+        "tpmActivated": { "type": ["boolean", "null"] }
+      }
+    },
+    "cpu": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "manufacturer": { "type": ["string", "null"] },
+        "cores": { "type": "integer" },
+        "logicalProcessors": { "type": "integer" },
+        "architecture": { "type": "string" },
+        "maxClockMHz": { "type": ["integer", "null"] }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "required": ["totalGB"],
+      "properties": {
+        "totalGB": { "type": "number" },
+        "moduleCount": { "type": "integer" },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sizeGB": { "type": "number" },
+              "speedMHz": { "type": ["integer", "null"] },
+              "manufacturer": { "type": ["string", "null"] },
+              "partNumber": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "required": ["disks"],
+      "properties": {
+        "disks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "sizeGB"],
+            "properties": {
+              "index": { "type": "integer" },
+              "model": { "type": ["string", "null"] },
+              "sizeGB": { "type": "number" },
+              "mediaType": { "type": "string", "enum": ["SSD", "HDD", "NVMe", "SCM", "removable", "unknown"] },
+              "bus": { "type": ["string", "null"] },
+              "serial": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "adapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": ["string", "null"] },
+              "make": { "type": ["string", "null"], "description": "NIC manufacturer/vendor (Win32_NetworkAdapter.Manufacturer)" },
+              "model": { "type": ["string", "null"], "description": "NIC product/model (Win32_NetworkAdapter.ProductName)" },
+              "mac": { "type": ["string", "null"] },
+              "type": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "gpu": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "make": { "type": ["string", "null"], "description": "GPU vendor (Win32_VideoController.AdapterCompatibility, e.g. NVIDIA, Intel Corporation)" },
+          "model": { "type": ["string", "null"], "description": "GPU chip/model (Win32_VideoController.VideoProcessor, fallback Name)" },
+          "driverVersion": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
