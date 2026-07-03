@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# k3s overlay. Manifests are identical to the full-k8s overlay — the k3s-specific
+# work is at CLUSTER install time (disable Klipper ServiceLB, flannel, and kube-proxy
+# so Cilium LB IPAM + BGP own LoadBalancer VIPs). See platform/README.md.
+resources:
+  - ../../base
+  - vars.yaml
+
+components:
+  - ../../components/anycast
+
+images:
+  - name: ghcr.io/192d-wing/windep-api
+    newTag: "0.1.0"
