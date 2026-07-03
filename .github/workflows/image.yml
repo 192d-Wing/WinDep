@@ -22,7 +22,7 @@ permissions:
 env:
   REGISTRY: ghcr.io/192d-wing
   IMAGE: windep-api
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: "" # set per-job by the "Resolve image tag" step (git tag / dispatch input, minus leading v)
 
 jobs:
   build:
@@ -38,6 +38,14 @@ jobs:
             base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Derive the image tag from the git tag (v0.1.1) or the dispatch input,
+      # stripping a leading "v" so the image is 0.1.1 — matching the Kustomize
+      # `images: newTag` the Deployment pulls.
+      - name: Resolve image tag
+        run: |
+          RAW="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "TAG=${RAW#v}" >> "$GITHUB_ENV"
 
       - name: Log in to Repo One (Iron Bank)
         run: echo "${{ secrets.REPO1 }}" | buildah login -u "${{ secrets.REPO1_USER }}" --password-stdin registry1.dso.mil
@@ -67,6 +75,11 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      - name: Resolve image tag
+        run: |
+          RAW="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "TAG=${RAW#v}" >> "$GITHUB_ENV"
+
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | buildah login -u "${{ github.actor }}" --password-stdin ghcr.io
 

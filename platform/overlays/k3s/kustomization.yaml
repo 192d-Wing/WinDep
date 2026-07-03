@@ -13,4 +13,4 @@ components:
 
 images:
   - name: ghcr.io/192d-wing/windep-api
-    newTag: "0.1.0"
+    newTag: "0.1.1"
