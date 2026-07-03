@@ -34,6 +34,11 @@ and commits follow [Conventional Commits](https://www.conventionalcommits.org/en
   A `build.sh` matrix + a GitHub Actions Buildah workflow assemble the multi-arch manifest.
 - **Dependencies** refreshed to latest (fiber 2.52.13, fiberprometheus 2.17.0, …); `govulncheck`
   reports no known vulnerabilities.
+- **CI** (`.github/workflows/ci.yml`) — on push to `main` / PRs: Go vet, build, and race+coverage
+  tests across an **amd64 + arm64 matrix** (native runners), `govulncheck`, plus Codecov and
+  SonarQube (once, on the primary leg). Adds Go unit tests for the API (~64% coverage).
+- **Supply chain** — all GitHub Actions pinned to full commit **SHAs** (checkout v7, setup-go v6,
+  codecov v7, sonar v8, buildah/push v2). Image CI logs in to **Repo One** via `REPO1_USER`/`REPO1`.
 
 - **Interactive deploys now report** status and logs (previously only zero-touch/headless did).
 - **Throttled telemetry** — progress reports are debounced to every ≥5% (or completion), and
