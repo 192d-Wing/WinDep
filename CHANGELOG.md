@@ -28,6 +28,12 @@ and commits follow [Conventional Commits](https://www.conventionalcommits.org/en
 - **API hardening** (code review) — bounded the per-pod debug map (eviction at capacity),
   readiness now fails on SIGTERM with a drain delay before shutdown, health probes are excluded
   from request metrics, and an optional `API_TOKEN` bearer gate protects `/api/*` (off by default).
+- **Container image** (`image/`) — a `Containerfile` (Podman/Buildah) building the API on Iron Bank
+  UBI10 for **amd64 + arm64**, with **FIPS 140-3** via Go's native Cryptographic Module
+  (`GOFIPS140`, `CGO_ENABLED=0`, static cross-compile). Non-root, read-only-rootfs compatible.
+  A `build.sh` matrix + a GitHub Actions Buildah workflow assemble the multi-arch manifest.
+- **Dependencies** refreshed to latest (fiber 2.52.13, fiberprometheus 2.17.0, …); `govulncheck`
+  reports no known vulnerabilities.
 
 - **Interactive deploys now report** status and logs (previously only zero-touch/headless did).
 - **Throttled telemetry** — progress reports are debounced to every ≥5% (or completion), and
