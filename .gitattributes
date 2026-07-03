@@ -1,0 +1,13 @@
+# Normalize line endings across platforms.
+* text=auto eol=lf
+
+# Windows scripts must keep CRLF (WinPE / cmd.exe / PowerShell hosts).
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+
+# Treat images and boot media as binary (also ignored via .gitignore).
+*.wim binary
+*.iso binary
+*.esd binary

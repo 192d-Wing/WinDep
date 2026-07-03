@@ -1,0 +1,29 @@
+# Claude Code local settings
+.claude/
+
+# Local dev-server instance (real install.wim + per-machine configs with secrets)
+dev-server/
+
+# Real per-machine configs carry local-admin / domain-join credentials — never commit.
+# Only the EXAMPLE template is tracked.
+Server/wwwroot/config/machines/*.json
+!Server/wwwroot/config/machines/EXAMPLE-SERIAL.json
+
+# Windows images and built boot media (large / generated artifacts)
+*.wim
+*.iso
+*.esd
+out/
+Build/out/
+
+# WinPE build working directory (if created under the repo)
+WinDep_WinPE/
+
+# Runtime artifacts
+inventory.json
+*.log
+
+# OS / editor cruft
+Thumbs.db
+desktop.ini
+*.tmp
