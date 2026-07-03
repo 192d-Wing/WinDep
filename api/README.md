@@ -34,6 +34,8 @@ explicitly non-authoritative (a given machine's reports may have landed on other
 |-----|---------|-------|
 | `LISTEN_ADDR` | `:8443` | Listen address |
 | `TLS_CERT` / `TLS_KEY` | _(unset)_ | PEM paths. If set, serves HTTPS; if unset, plaintext (expects upstream TLS termination). |
+| `API_TOKEN` | _(unset)_ | If set, `/api/*` requires `Authorization: Bearer <token>` (defense in depth; network isolation is the primary control). |
+| `DRAIN_DELAY` | `5s` | On SIGTERM, readiness fails and the pod waits this long (endpoint/BGP withdrawal) before draining in-flight requests. |
 
 WinPE trusts the internal CA, so the mounted cert must chain to it.
 
