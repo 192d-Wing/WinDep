@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    WinDep OOBE unattend template (Windows 11 Pro, amd64).
+
+    This is applied to W:\Windows\Panther\unattend.xml AFTER the image is laid down,
+    so only the offlineServicing/specialize/oobeSystem passes matter here.
+
+    Tokens in {BRACES} are substituted by Set-DeployUnattend (DeployEngine.psm1) from
+    the resolved ZTP config. Values arrive over in-WinPE HTTPS only.
+
+      {COMPUTERNAME}     - resolved machine name (<=15 chars)
+      {TIMEZONE}         - e.g. "Eastern Standard Time"
+      {LOCALADMINUSER}   - local admin account name
+      {LOCALADMINPASS}   - local admin password (plaintext in XML on the target disk)
+      {JOINDOMAIN}       - AD domain FQDN, or empty string for local-only
+      {DOMAINOU}         - OU DN for the computer object (optional)
+      {DOMAINUSER}       - account used to join the domain
+      {DOMAINPASS}       - password for the domain-join account
+
+    NOTE: If not joining a domain, leave JOINDOMAIN empty. The <Identification> block
+    below is still emitted but an empty JoinDomain is ignored by Windows. To hard-remove
+    domain join, delete the Microsoft-Windows-UnattendedJoin component before shipping.
+
+    SECURITY: unattend.xml on the deployed disk contains the passwords above in the
+    Panther folder. Windows normally scrubs it after OOBE; verify per your policy, or
+    use a specialize-pass script to delete C:\Windows\Panther\unattend.xml.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <ComputerName>{COMPUTERNAME}</ComputerName>
+      <TimeZone>{TIMEZONE}</TimeZone>
+    </component>
+
+    <!-- Domain join (ignored automatically when {JOINDOMAIN} is empty). -->
+    <component name="Microsoft-Windows-UnattendedJoin"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <Identification>
+        <JoinDomain>{JOINDOMAIN}</JoinDomain>
+        <MachineObjectOU>{DOMAINOU}</MachineObjectOU>
+        <Credentials>
+          <Domain>{JOINDOMAIN}</Domain>
+          <Username>{DOMAINUSER}</Username>
+          <Password>{DOMAINPASS}</Password>
+        </Credentials>
+      </Identification>
+    </component>
+  </settings>
+
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+
+      <!-- Skip every OOBE prompt, including the Microsoft-account requirement. -->
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+
+      <!-- Local admin account created up front. -->
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>{LOCALADMINUSER}</Name>
+            <Group>Administrators</Group>
+            <DisplayName>{LOCALADMINUSER}</DisplayName>
+            <Password>
+              <Value>{LOCALADMINPASS}</Value>
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+
+      <!-- Bypass the Windows 11 online-account / network requirement during OOBE. -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+          <Description>Bypass network requirement in OOBE</Description>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+
+      <TimeZone>{TIMEZONE}</TimeZone>
+      <RegisteredOrganization>JHICS</RegisteredOrganization>
+    </component>
+  </settings>
+
+</unattend>
