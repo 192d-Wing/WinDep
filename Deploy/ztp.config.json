@@ -2,6 +2,7 @@
   "_comment": "WinDep ZTP settings. Baked into boot.wim but editable on the USB (X:\\Deploy\\ztp.config.json) so you can repoint the server without rebuilding WinPE. Server-side config/machines/<SERIAL>.json and config/default.json override the 'defaults' block below.",
 
   "serverUrl": "https://deploy.jhics.org",
+  "apiUrl": "https://windep-api.jhics.org",
 
   "policyUrl": "https://opa.jhics.org:8181/v1/data/windep/decision",
   "policyFailAction": "hold",
