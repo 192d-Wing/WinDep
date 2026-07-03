@@ -2,6 +2,7 @@
 
 <!-- The Sonar badge assumes SonarCloud; for a self-hosted (Platform One) SonarQube,
      change ?server= to your instance URL. -->
+[![Release](https://img.shields.io/github/v/release/192d-Wing/WinDep?style=for-the-badge&logo=github&label=release)](https://github.com/192d-Wing/WinDep/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/192d-Wing/WinDep/ci.yml?branch=main&style=for-the-badge&logo=github&label=CI)](https://github.com/192d-Wing/WinDep/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/192d-Wing/WinDep/codeql.yml?branch=main&style=for-the-badge&logo=github&label=CodeQL)](https://github.com/192d-Wing/WinDep/actions/workflows/codeql.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/192d-Wing/WinDep?style=for-the-badge&logo=codecov)](https://codecov.io/gh/192d-Wing/WinDep)
