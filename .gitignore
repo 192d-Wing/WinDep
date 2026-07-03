@@ -23,6 +23,10 @@ WinDep_WinPE/
 inventory.json
 *.log
 
+# Go build artifacts
+/api/windep-api
+*.exe
+
 # OS / editor cruft
 Thumbs.db
 desktop.ini
