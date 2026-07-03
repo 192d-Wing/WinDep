@@ -1,0 +1,18 @@
+{
+  "_comment": "Per-machine override. Rename the file to the sanitized BIOS serial number, e.g. 5CG1234ABC.json. The agent fetches config/machines/<SanitizedSerial>.json first, then falls back to default.json. Any field omitted here inherits from default.json / ztp.config.json.",
+
+  "mode": "zerotouch",
+  "targetDisk": "first",
+  "computerName": "ENG-DEV-07",
+  "imageUrl": "https://deploy.jhics.org/images/install.wim",
+
+  "unattend": {
+    "TIMEZONE": "Eastern Standard Time",
+    "LOCALADMINUSER": "localadmin",
+    "LOCALADMINPASS": "REPLACE-ME",
+    "JOINDOMAIN": "jhics.org",
+    "DOMAINOU": "OU=Engineering,OU=Workstations,DC=jhics,DC=org",
+    "DOMAINUSER": "svc-domainjoin",
+    "DOMAINPASS": "REPLACE-ME"
+  }
+}
