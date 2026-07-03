@@ -186,12 +186,17 @@ function New-InteractivePlan {
         UnattendValues   = @{}
     }
     if ($ui.UnattendCheck.IsChecked) {
+        # Local admin password is entered by the operator (no default baked in).
+        $adminPass = $ui.AdminPassBox.Password
+        if ([string]::IsNullOrEmpty($adminPass)) {
+            throw "Enter a local admin password (required for unattend), or uncheck 'Apply unattend'."
+        }
         $plan.UnattendTemplate = Join-Path $ScriptRoot 'unattend.template.xml'
         $plan.UnattendValues = @{
             COMPUTERNAME   = $name
             TIMEZONE       = 'Eastern Standard Time'
             LOCALADMINUSER = 'localadmin'
-            LOCALADMINPASS = 'ChangeMe!123'
+            LOCALADMINPASS = $adminPass
             JOINDOMAIN     = ''
             DOMAINOU       = ''
             DOMAINUSER     = ''
