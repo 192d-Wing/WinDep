@@ -39,6 +39,10 @@ and commits follow [Conventional Commits](https://www.conventionalcommits.org/en
   SonarQube (once, on the primary leg). Adds Go unit tests for the API (~64% coverage).
 - **Supply chain** — all GitHub Actions pinned to full commit **SHAs** (checkout v7, setup-go v6,
   codecov v7, sonar v8, buildah/push v2). Image CI logs in to **Repo One** via `REPO1_USER`/`REPO1`.
+- **CodeQL** (`.github/workflows/codeql.yml`) — static analysis of the Go service on push/PR/weekly
+  (`security-extended` queries), SHA-pinned.
+- **`SECURITY.md`** — private vulnerability reporting policy, disclosure timeline, and hardening notes.
+- **README badges** — CI, CodeQL, Codecov coverage, and Sonar quality gate (for-the-badge style).
 
 - **Interactive deploys now report** status and logs (previously only zero-touch/headless did).
 - **Throttled telemetry** — progress reports are debounced to every ≥5% (or completion), and
