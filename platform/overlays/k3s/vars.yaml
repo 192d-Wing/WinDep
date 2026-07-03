@@ -1,10 +1,15 @@
-# k3s environment variables (BGP ASNs + anycast addresses + image).
-# Independent from the example overlay — a k3s edge site can run its own ASN/VIP.
+# k3s environment variables (anycast addresses + BGP advertise group + image).
+# Independent from the example overlay — a k3s edge site can run its own VIP.
 #
 # IMPORTANT: k3s ships its own ServiceLB (Klipper) and flannel CNI, both of which
 # conflict with Cilium LB IPAM + BGP. See platform/README.md for the required k3s
 # install flags (--disable=servicelb --disable=traefik --flannel-backend=none
 # --disable-kube-proxy) and the Cilium install values.
+#
+# NOTE: BGP peering (ASNs, neighbors) is CLUSTER-OWNED here — the cluster-wide
+# CiliumBGPClusterConfig "k3s-upstream" peers upstream and its CiliumBGPPeerConfigs
+# export any CiliumBGPAdvertisement labeled `advertise: <advertiseGroup>`. So this
+# overlay carries no ASNs; it only names the advertise group to opt our VIP in.
 apiVersion: windep.dev/v1
 kind: Variables
 metadata:
@@ -14,6 +19,6 @@ metadata:
 spec:
   anycastIP: "10.20.100.10"
   lbPoolCIDR: "10.20.100.0/24"
-  localASN: 65011
-  peerASN: 65010
-  peerAddress: "10.20.0.1/32"
+  # Must match the label the cluster's CiliumBGPPeerConfigs select
+  # (families[].advertisements.matchLabels.advertise).
+  advertiseGroup: "k3s-pod-cidrs"

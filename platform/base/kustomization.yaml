@@ -2,8 +2,9 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Base manifests carry sane default values; overlays override the environment-specific
-# BGP ASNs and anycast addresses via replacements from a single vars.yaml. See
-# platform/overlays/example/.
+# anycast addresses and BGP advertise group via replacements from a single vars.yaml.
+# See platform/overlays/example/. NOTE: BGP *peering* is cluster-owned (a cluster-wide
+# CiliumBGPClusterConfig); WinDep only contributes a CiliumBGPAdvertisement.
 resources:
   - k8s/namespace.yaml
   - k8s/deployment.yaml
@@ -11,6 +12,6 @@ resources:
   - k8s/hpa.yaml
   - k8s/poddisruptionbudget.yaml
   - cilium/lb-ippool.yaml
-  - cilium/bgp-peering.yaml
-  # cilium/l2announcement.yaml is an ALTERNATIVE to bgp-peering.yaml (L2, not anycast).
+  - cilium/bgp-advertisement.yaml
+  # cilium/l2announcement.yaml is an ALTERNATIVE to bgp-advertisement.yaml (L2, not anycast).
   # Do not enable both for the same Service — swap it in via an overlay if BGP is unavailable.

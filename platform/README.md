@@ -15,9 +15,12 @@ platform/
    └─ k3s/                   # k3s edge cluster
 ```
 
-Each overlay supplies a single **`vars.yaml`** (the variable file) with that site's BGP ASNs and
-anycast addresses; the `anycast` component injects them via Kustomize `replacements`. ASNs stay
-**integers** (a typed YAML resource, not a stringly-typed ConfigMap/`.env`).
+Each overlay supplies a single **`vars.yaml`** (the variable file) with that site's anycast
+addresses and its BGP **advertise group**; the `anycast` component injects them via Kustomize
+`replacements`. BGP **peering** (ASNs, neighbors) is **cluster-owned** — a cluster-wide
+`CiliumBGPClusterConfig` peers upstream and its `CiliumBGPPeerConfig`s export any
+`CiliumBGPAdvertisement` labeled `advertise: <group>`. WinDep therefore ships only a
+`CiliumBGPAdvertisement` (labeled with that group), not a peering policy.
 
 ```bash
 kubectl kustomize platform/overlays/example   # preview
@@ -93,8 +96,10 @@ Notes:
 |-------|---------------|------|
 | `anycastIP` | Service `io.cilium/lb-ipam-ips` annotation | string |
 | `lbPoolCIDR` | `CiliumLoadBalancerIPPool` block | string |
-| `localASN` / `peerASN` | `CiliumBGPPeeringPolicy` router / neighbor | integer |
-| `peerAddress` | BGP neighbor address | string |
+| `advertiseGroup` | `CiliumBGPAdvertisement` `advertise` label | string |
+
+`advertiseGroup` must match the label the cluster's `CiliumBGPPeerConfig`s select
+(`families[].advertisements.matchLabels.advertise`), or the VIP is allocated but never advertised.
 
 The image (registry/tag) is set with the native Kustomize `images:` transformer in each overlay's
 `kustomization.yaml`.

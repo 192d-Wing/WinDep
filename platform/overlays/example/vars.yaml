@@ -1,12 +1,14 @@
 # -----------------------------------------------------------------------------
-# THE variable file: per-environment BGP ASNs and anycast addresses (+ image).
+# THE variable file: per-environment anycast addresses + BGP advertise group (+ image).
 #
 # This is a local-config resource (never applied to the cluster). Kustomize
 # `replacements` in kustomization.yaml read these fields and inject them into the
-# Service annotation, the Cilium LB IP pool, and the Cilium BGP peering policy.
+# Service annotation, the Cilium LB IP pool, and the Cilium BGP advertisement.
 #
-# ASNs are INTEGERS on purpose — the Cilium CRD requires integers, and a plain
-# .env/ConfigMap would force them to strings. Keeping them here preserves the type.
+# BGP PEERING is cluster-owned: a cluster-wide CiliumBGPClusterConfig peers upstream
+# and its CiliumBGPPeerConfigs export any CiliumBGPAdvertisement carrying the label
+# `advertise: <advertiseGroup>`. So this file names no ASNs/neighbors — it only opts
+# our VIP into advertisement via that group label.
 # -----------------------------------------------------------------------------
 apiVersion: windep.dev/v1
 kind: Variables
@@ -19,7 +21,6 @@ spec:
   anycastIP: "10.0.100.10"
   # CIDR block the Cilium LB IPAM pool allocates from.
   lbPoolCIDR: "10.0.100.0/24"
-  # BGP: this cluster's ASN and the upstream router.
-  localASN: 65001
-  peerASN: 65000
-  peerAddress: "10.0.0.1/32"
+  # Label group the cluster's CiliumBGPPeerConfigs export. Set to match THIS
+  # cluster's peer configs (families[].advertisements.matchLabels.advertise).
+  advertiseGroup: "windep-anycast"

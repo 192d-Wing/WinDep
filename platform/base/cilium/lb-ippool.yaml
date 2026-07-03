@@ -1,6 +1,6 @@
 # Cilium LoadBalancer IPAM pool — the block the anycast VIP is allocated from.
 # The Service (deploy/k8s/service.yaml) pins 10.0.100.10 out of this pool.
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: windep-anycast-pool

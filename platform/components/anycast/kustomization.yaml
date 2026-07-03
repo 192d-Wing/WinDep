@@ -1,7 +1,11 @@
-# Reusable component: inject BGP ASNs and anycast addresses from an overlay's
-# vars.yaml (kind: Variables, name: windep-vars) into the Service and Cilium
+# Reusable component: inject anycast addresses and the BGP advertise group from an
+# overlay's vars.yaml (kind: Variables, name: windep-vars) into the Service and Cilium
 # resources. Each overlay supplies its own vars.yaml and includes this component,
 # so the replacement wiring lives in exactly one place.
+#
+# BGP peering is cluster-owned (CiliumBGPClusterConfig + CiliumBGPPeerConfig live on the
+# cluster, not here), so there is no ASN/neighbor injection — only the advertise-group
+# label that makes the cluster's peer configs export our advertisement.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
@@ -30,38 +34,14 @@ replacements:
         fieldPaths:
           - spec.blocks.0.cidr
 
-  # localASN -> CiliumBGPPeeringPolicy (integer)
+  # advertise group -> the label the cluster's BGP peer configs export
   - source:
       kind: Variables
       name: windep-vars
-      fieldPath: spec.localASN
+      fieldPath: spec.advertiseGroup
     targets:
       - select:
-          kind: CiliumBGPPeeringPolicy
-          name: windep-anycast-bgp
+          kind: CiliumBGPAdvertisement
+          name: windep-anycast
         fieldPaths:
-          - spec.virtualRouters.0.localASN
-
-  # peerASN -> BGP neighbor (integer)
-  - source:
-      kind: Variables
-      name: windep-vars
-      fieldPath: spec.peerASN
-    targets:
-      - select:
-          kind: CiliumBGPPeeringPolicy
-          name: windep-anycast-bgp
-        fieldPaths:
-          - spec.virtualRouters.0.neighbors.0.peerASN
-
-  # peerAddress -> BGP neighbor
-  - source:
-      kind: Variables
-      name: windep-vars
-      fieldPath: spec.peerAddress
-    targets:
-      - select:
-          kind: CiliumBGPPeeringPolicy
-          name: windep-anycast-bgp
-        fieldPaths:
-          - spec.virtualRouters.0.neighbors.0.peerAddress
+          - metadata.labels.advertise
