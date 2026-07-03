@@ -13,9 +13,10 @@ and commits follow [Conventional Commits](https://www.conventionalcommits.org/en
 - **Telemetry backend** (`api/`) — a stateless Go/[Fiber](https://gofiber.io/) service that
   receives deployment status (`/api/report`), streamed logs (`/api/log`), and inventory
   (`/api/inventory`), emitting structured JSON to stdout plus Prometheus metrics (`/metrics`).
-- **Kubernetes + Cilium deployment** (`deploy/`) — Deployment, LoadBalancer Service, CPU HPA
-  (2–10 replicas), PodDisruptionBudget, and Cilium **anycast** via LB IPAM + BGP advertisement
-  (with an L2-announcement alternative).
+- **Kubernetes + Cilium deployment** (`platform/`) — Kustomize base + overlay: Deployment,
+  LoadBalancer Service, CPU HPA (2–10 replicas), PodDisruptionBudget, and Cilium **anycast** via
+  LB IPAM + BGP advertisement (with an L2-announcement alternative). A single typed `vars.yaml`
+  parameterizes the BGP ASNs and anycast addresses per environment (ASNs stay integers).
 - **Client log streaming** — `Send-ZtpLog` batches deploy log lines to `/api/log`; the WPF UI
   ships from its render loop and the headless path flushes in batches.
 

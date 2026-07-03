@@ -1,0 +1,75 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - vars.yaml # local-config source for the replacements below
+
+# Per-environment container image (name/tag). Registry differs per site.
+images:
+  - name: ghcr.io/192d-wing/windep-api
+    newTag: "0.1.0"
+
+# Inject the BGP ASNs and anycast addresses from vars.yaml into the manifests.
+# Integer fields (localASN/peerASN) keep their type because the source is a typed
+# YAML resource, not a stringly-typed ConfigMap.
+replacements:
+  # anycast VIP -> Service annotation
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.anycastIP
+    targets:
+      - select:
+          kind: Service
+          name: windep-api
+        fieldPaths:
+          - metadata.annotations.[io.cilium/lb-ipam-ips]
+
+  # LB pool CIDR -> CiliumLoadBalancerIPPool
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.lbPoolCIDR
+    targets:
+      - select:
+          kind: CiliumLoadBalancerIPPool
+          name: windep-anycast-pool
+        fieldPaths:
+          - spec.blocks.0.cidr
+
+  # localASN -> CiliumBGPPeeringPolicy (integer)
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.localASN
+    targets:
+      - select:
+          kind: CiliumBGPPeeringPolicy
+          name: windep-anycast-bgp
+        fieldPaths:
+          - spec.virtualRouters.0.localASN
+
+  # peerASN -> BGP neighbor (integer)
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.peerASN
+    targets:
+      - select:
+          kind: CiliumBGPPeeringPolicy
+          name: windep-anycast-bgp
+        fieldPaths:
+          - spec.virtualRouters.0.neighbors.0.peerASN
+
+  # peerAddress -> BGP neighbor
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.peerAddress
+    targets:
+      - select:
+          kind: CiliumBGPPeeringPolicy
+          name: windep-anycast-bgp
+        fieldPaths:
+          - spec.virtualRouters.0.neighbors.0.peerAddress

@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: windep-api
+  namespace: windep
+  labels:
+    app: windep-api
+    app.kubernetes.io/part-of: windep
+spec:
+  replicas: 2 # HPA manages this; keep >= 2 for anycast/HA
+  selector:
+    matchLabels:
+      app: windep-api
+  template:
+    metadata:
+      labels:
+        app: windep-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8443"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: windep-api
+      containers:
+        - name: api
+          image: ghcr.io/192d-wing/windep-api:0.1.0 # replace with your registry
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: LISTEN_ADDR
+              value: ":8443"
+            - name: TLS_CERT
+              value: "/tls/tls.crt"
+            - name: TLS_KEY
+              value: "/tls/tls.key"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            # TLS cert chaining to the internal CA that WinPE trusts.
+            #   kubectl -n windep create secret tls windep-api-tls \
+            #     --cert=api.crt --key=api.key
+            secretName: windep-api-tls
