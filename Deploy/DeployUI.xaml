@@ -88,23 +88,28 @@
 
             <!-- INTERACTIVE config panel -->
             <StackPanel x:Name="ConfigPanel" Visibility="Collapsed" VerticalAlignment="Center" MaxWidth="560">
-                <TextBlock Text="Interactive deployment" FontSize="18" Margin="0,0,0,18" Foreground="#EBEFF5"/>
+                <TextBlock Text="Interactive deployment" FontSize="18" Margin="0,0,0,10" Foreground="#EBEFF5"/>
 
                 <TextBlock Text="Target disk (WILL BE ERASED)" FontSize="12" Foreground="#AEBFD4" Margin="0,0,0,4"/>
-                <ComboBox x:Name="DiskCombo" Height="34" Margin="0,0,0,16" FontSize="13"/>
+                <ComboBox x:Name="DiskCombo" Height="34" Margin="0,0,0,10" FontSize="13"/>
 
                 <TextBlock Text="Computer name" FontSize="12" Foreground="#AEBFD4" Margin="0,0,0,4"/>
-                <TextBox x:Name="NameBox" Height="34" Margin="0,0,0,16" FontSize="13"
+                <TextBox x:Name="NameBox" Height="34" Margin="0,0,0,10" FontSize="13"
                          Background="#254267" Foreground="White" BorderBrush="#3C5B84" Padding="8,6"/>
 
-                <CheckBox x:Name="UnattendCheck" Content="Apply unattend (automate Windows OOBE)"
-                          Foreground="#EBEFF5" IsChecked="True" Margin="0,0,0,20"/>
+                <TextBlock Text="Local admin password (required for unattend)" FontSize="12"
+                           Foreground="#AEBFD4" Margin="0,0,0,4"/>
+                <PasswordBox x:Name="AdminPassBox" Height="34" Margin="0,0,0,10" FontSize="13"
+                             Background="#254267" Foreground="White" BorderBrush="#3C5B84" Padding="8,6"/>
 
-                <Border Background="#3A1F22" CornerRadius="6" Padding="12" Margin="0,0,0,20">
+                <CheckBox x:Name="UnattendCheck" Content="Apply unattend (automate Windows OOBE)"
+                          Foreground="#EBEFF5" IsChecked="True" Margin="0,0,0,10"/>
+
+                <Border Background="#3A1F22" CornerRadius="6" Padding="10" Margin="0,0,0,10">
                     <TextBlock TextWrapping="Wrap" Foreground="#F2B8B8" FontSize="12"
                                Text="The selected disk will be completely erased. Type ERASE below to confirm."/>
                 </Border>
-                <TextBox x:Name="ConfirmBox" Height="34" Margin="0,0,0,20" FontSize="13"
+                <TextBox x:Name="ConfirmBox" Height="34" Margin="0,0,0,14" FontSize="13"
                          Background="#254267" Foreground="White" BorderBrush="#3C5B84" Padding="8,6"/>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
