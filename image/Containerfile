@@ -1,0 +1,53 @@
+# WinDep telemetry API — FIPS 140-3, hardened Iron Bank UBI10 runtime.
+#
+# Built with Podman/Buildah (Containerfile) or Docker buildx. Build context is the
+# Go module at ../api. See image/README.md and image/build.sh (amd64+arm64 matrix).
+#
+#   podman build -f image/Containerfile \
+#     --platform linux/amd64 \
+#     --build-arg BASE_IMAGE=registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2 \
+#     -t ghcr.io/192d-wing/windep-api:0.1.0-amd64 api
+#
+# FIPS: uses Go's native FIPS 140-3 Cryptographic Module (GOFIPS140). It is pure Go,
+# so CGO stays OFF, the binary stays static, and it cross-compiles for every arch
+# without OpenSSL/CGO/QEMU. GOFIPS140 also bakes the runtime fips140 GODEBUG to "on".
+
+ARG BUILDER_IMAGE=docker.io/library/golang:1.25-alpine
+# Runtime base — set per architecture by the build matrix:
+#   amd64 -> registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
+#   arm64 -> registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64
+ARG BASE_IMAGE=registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
+# CMVP-validated Go Cryptographic Module snapshot (verify current cert for your ATO).
+ARG GOFIPS140=v1.0.0
+
+# --- build stage: cross-compile a static, FIPS-enabled binary on the build host ---
+FROM --platform=$BUILDPLATFORM ${BUILDER_IMAGE} AS build
+ARG TARGETOS
+ARG TARGETARCH
+ARG GOFIPS140
+WORKDIR /src
+ENV CGO_ENABLED=0 GOFIPS140=${GOFIPS140}
+COPY go.mod go.sum ./
+RUN go mod download
+COPY *.go ./
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -trimpath -o /out/windep-api .
+
+# --- runtime stage: Iron Bank UBI10, non-root, read-only-rootfs friendly ---
+FROM ${BASE_IMAGE}
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.title="windep-api" \
+      org.opencontainers.image.description="WinDep deployment telemetry API (FIPS 140-3)" \
+      org.opencontainers.image.source="https://github.com/192d-Wing/WinDep" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+COPY --from=build /out/windep-api /usr/local/bin/windep-api
+
+# Enforce FIPS-only crypto at runtime (GOFIPS140 already defaults it on; explicit here).
+# Use fips140=only to also REJECT non-approved algorithms outright.
+ENV GODEBUG=fips140=on
+
+USER 1001
+EXPOSE 8443
+ENTRYPOINT ["/usr/local/bin/windep-api"]

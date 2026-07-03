@@ -49,11 +49,10 @@ go run .                    # plaintext on :8443
 TLS_CERT=api.crt TLS_KEY=api.key go run .
 ```
 
-Container:
+Container image (FIPS 140-3, Iron Bank UBI10, amd64+arm64) — see [`image/`](../image/README.md):
 
 ```bash
-docker build -t ghcr.io/192d-wing/windep-api:0.1.0 api/
-docker push ghcr.io/192d-wing/windep-api:0.1.0
+REGISTRY=ghcr.io/192d-wing TAG=0.1.0 ./image/build.sh
 ```
 
 ## Deploy (Kubernetes + Cilium)
