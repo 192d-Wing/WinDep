@@ -59,23 +59,41 @@ docker push ghcr.io/192d-wing/windep-api:0.1.0
 Prereqs: Cilium with the **BGP control plane** enabled (for anycast) and metrics-server
 (for the HPA).
 
+Manifests are managed with **Kustomize** (`platform/`): a `base/` plus an `overlays/example/`
+whose single [`vars.yaml`](../platform/overlays/example/vars.yaml) sets the per-environment BGP
+ASNs and anycast addresses (see "Per-environment variables" below).
+
 ```bash
 # 1) TLS cert (chains to your internal CA)
 kubectl create namespace windep
 kubectl -n windep create secret tls windep-api-tls --cert=api.crt --key=api.key
 
-# 2) Cilium LB IPAM + anycast advertisement
-kubectl apply -f deploy/cilium/lb-ippool.yaml
-kubectl apply -f deploy/cilium/bgp-peering.yaml       # true anycast (ECMP)
-#   or, for a flat L2 segment only (NOT anycast):
-#   kubectl apply -f deploy/cilium/l2announcement.yaml
+# 2) Edit platform/overlays/example/vars.yaml (ASNs, anycast IP, LB CIDR, peer)
+#    and the image in platform/overlays/example/kustomization.yaml, then apply
+#    everything (app + Cilium LB IPAM + BGP) in one shot:
+kubectl apply -k platform/overlays/example
 
-# 3) App
-kubectl apply -f deploy/k8s/deployment.yaml
-kubectl apply -f deploy/k8s/service.yaml
-kubectl apply -f deploy/k8s/hpa.yaml
-kubectl apply -f deploy/k8s/poddisruptionbudget.yaml
+#    Preview without applying:
+kubectl kustomize platform/overlays/example
 ```
+
+For a flat L2 segment without BGP (NOT anycast), swap `cilium/bgp-peering.yaml` for
+`cilium/l2announcement.yaml` in an overlay.
+
+### Per-environment variables
+
+[`platform/overlays/example/vars.yaml`](../platform/overlays/example/vars.yaml) is the one file
+you edit per site. Kustomize `replacements` inject it into the manifests:
+
+| Variable | Injected into | Type |
+|----------|---------------|------|
+| `anycastIP` | Service `io.cilium/lb-ipam-ips` annotation | string |
+| `lbPoolCIDR` | `CiliumLoadBalancerIPPool` block | string |
+| `localASN` / `peerASN` | `CiliumBGPPeeringPolicy` router / neighbor | **integer** |
+| `peerAddress` | BGP neighbor address | string |
+
+ASNs are kept as integers in a typed YAML resource (not a stringly-typed ConfigMap/`.env`) so the
+Cilium CRD's integer schema is satisfied. Copy the `example` overlay per environment.
 
 Point the agents at the VIP by setting `apiUrl` in
 [`Deploy/ztp.config.json`](../Deploy/ztp.config.json), e.g.
@@ -91,7 +109,7 @@ metric in `hpa.yaml` for request-rate scaling).
 
 ## Scaling knobs
 
-- **HPA**: `minReplicas`/`maxReplicas` and the CPU target in `deploy/k8s/hpa.yaml`.
+- **HPA**: `minReplicas`/`maxReplicas` and the CPU target in `platform/base/k8s/hpa.yaml`.
 - **Request-rate scaling**: fiberprometheus exposes `http_requests_total`; wire prometheus-adapter
   and uncomment the Pods metric in the HPA.
-- **Resources**: tune `requests`/`limits` in `deploy/k8s/deployment.yaml` (HPA math uses requests).
+- **Resources**: tune `requests`/`limits` in `platform/base/k8s/deployment.yaml` (HPA math uses requests).
