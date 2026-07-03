@@ -78,6 +78,7 @@ function Get-ZtpConfig {
 
     $settings = Get-ZtpSettings
     $server   = ($settings.serverUrl).TrimEnd('/')
+    $api      = if ($settings.PSObject.Properties.Name -contains 'apiUrl' -and $settings.apiUrl) { ($settings.apiUrl).TrimEnd('/') } else { $server }
     $id       = Get-MachineIdentity
     if (-not $Quiet) { Write-Host "Identity: serial=$($id.Serial) mac=$($id.Mac)" }
 
@@ -117,6 +118,7 @@ function Get-ZtpConfig {
         HasMachineConfig = $perMachineFound      # per-machine <serial>.json existed on the server
         Identity     = $id
         ServerUrl    = $server
+        ApiUrl       = $api        # telemetry API base (report/log); falls back to serverUrl
         Source       = if ($source) { $source } else { '(no server config — using local defaults)' }
     }
 }
@@ -140,6 +142,22 @@ function Merge-PolicyConfig {
     $Config
 }
 
+function Send-ZtpJson {
+    <# Best-effort JSON POST. Never throws, never writes to the host (avoids spamming
+       the console during streaming). Failures are logged to windep.log only. #>
+    param([string]$Uri, [string]$JsonBody, [int]$TimeoutSec = 8)
+    try {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+        $client = New-Object System.Net.Http.HttpClient
+        $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+        $content = New-Object System.Net.Http.StringContent($JsonBody, [System.Text.Encoding]::UTF8, 'application/json')
+        [void]$client.PostAsync($Uri, $content).GetAwaiter().GetResult()
+        $client.Dispose()
+    } catch {
+        try { Add-Content -LiteralPath 'X:\Windows\Temp\windep.log' -Value ("{0}  [WARN] telemetry POST failed: {1}" -f (Get-Date -Format o), $_.Exception.Message) -ErrorAction SilentlyContinue } catch { }
+    }
+}
+
 function Send-ZtpStatus {
     <# Best-effort status POST to <ServerUrl>/api/report. Never throws. #>
     param(
@@ -149,22 +167,36 @@ function Send-ZtpStatus {
         [int]$Percent = 0,
         [string]$Message = ''
     )
-    try {
-        $payload = @{
-            serial   = $Identity.Serial
-            mac      = $Identity.Mac
-            state    = $State
-            percent  = $Percent
-            message  = $Message
-            model    = $Identity.Model
-        } | ConvertTo-Json -Compress
-        Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
-        $client = New-Object System.Net.Http.HttpClient
-        $client.Timeout = [TimeSpan]::FromSeconds(15)
-        $content = New-Object System.Net.Http.StringContent($payload, [System.Text.Encoding]::UTF8, 'application/json')
-        [void]$client.PostAsync("$($ServerUrl.TrimEnd('/'))/api/report", $content).GetAwaiter().GetResult()
-        $client.Dispose()
-    } catch {
-        Write-Warning "Status report failed (non-fatal): $($_.Exception.Message)"
+    $payload = @{
+        serial  = $Identity.Serial
+        mac     = $Identity.Mac
+        state   = $State
+        percent = $Percent
+        message = $Message
+        model   = $Identity.Model
+    } | ConvertTo-Json -Compress
+    Send-ZtpJson -Uri "$($ServerUrl.TrimEnd('/'))/api/report" -JsonBody $payload
+}
+
+function Send-ZtpLog {
+    <# Best-effort batched log POST to <ServerUrl>/api/log. Accepts an array of
+       "[LEVEL] message" strings; splits the level back out for the server. #>
+    param(
+        [Parameter(Mandatory)][string]$ServerUrl,
+        [Parameter(Mandatory)][pscustomobject]$Identity,
+        [Parameter(Mandatory)][string[]]$Lines
+    )
+    if (-not $Lines -or $Lines.Count -eq 0) { return }
+    $ts = (Get-Date).ToUniversalTime().ToString('o')
+    $logLines = foreach ($l in $Lines) {
+        $level = 'INFO'; $msg = $l
+        if ($l -match '^\[(INFO|WARN|ERROR)\]\s*(.*)$') { $level = $Matches[1]; $msg = $Matches[2] }
+        @{ ts = $ts; level = $level; message = $msg }
     }
+    $payload = @{
+        serial = $Identity.Serial
+        mac    = $Identity.Mac
+        lines  = @($logLines)
+    } | ConvertTo-Json -Depth 5 -Compress
+    Send-ZtpJson -Uri "$($ServerUrl.TrimEnd('/'))/api/log" -JsonBody $payload
 }

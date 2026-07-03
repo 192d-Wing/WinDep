@@ -65,7 +65,8 @@ try {
         Write-Host "  Required remediations:"
         foreach ($m in $decision.Remediations) { Write-Host "   * $m" }
         Write-Host "------------------------------------------------------------"
-        Send-ZtpStatus -ServerUrl $settings.serverUrl -Identity $identity `
+        $apiBase = if ($settings.PSObject.Properties.Name -contains 'apiUrl' -and $settings.apiUrl) { $settings.apiUrl } else { $settings.serverUrl }
+        Send-ZtpStatus -ServerUrl $apiBase -Identity $identity `
             -State 'failed' -Message "Policy $($decision.Action): $(@($decision.Reasons) -join '; ')"
         Write-Host "No disk was touched. Exiting."
         exit 2
@@ -116,13 +117,30 @@ try {
         Write-Host ""
     }
 
-    Send-ZtpStatus -ServerUrl $cfg.ServerUrl -Identity $cfg.Identity -State 'started' -Message 'Headless deploy begin'
+    Send-ZtpStatus -ServerUrl $cfg.ApiUrl -Identity $cfg.Identity -State 'started' -Message 'Headless deploy begin'
+
+    # Log shipping: buffer lines and flush in small batches to /api/log.
+    $script:logBuf = New-Object System.Collections.Generic.List[string]
+    $shipFlush = { if ($cfg.ApiUrl -and $script:logBuf.Count -gt 0) {
+                       Send-ZtpLog -ServerUrl $cfg.ApiUrl -Identity $cfg.Identity -Lines $script:logBuf.ToArray()
+                       $script:logBuf.Clear() } }
+    $onLogShip = { param($m,$lvl)
+        & $onLog $m $lvl
+        $script:logBuf.Add(("[{0}] {1}" -f $lvl, $m))
+        if ($script:logBuf.Count -ge 12) { & $shipFlush }
+    }
+    # Progress: throttle status reports to every >=5% (or completion).
+    $script:lastRpt = -100
+
     Invoke-Deployment -Plan $plan `
         -OnProgress { param($p,$a) & $onProg $p $a
-                      Send-ZtpStatus -ServerUrl $cfg.ServerUrl -Identity $cfg.Identity -State 'progress' -Percent ([int]$p) -Message $a } `
-        -OnLog $onLog
+                      if ($cfg.ApiUrl -and ([int]$p -ge 100 -or ([int]$p - $script:lastRpt) -ge 5)) {
+                          $script:lastRpt = [int]$p
+                          Send-ZtpStatus -ServerUrl $cfg.ApiUrl -Identity $cfg.Identity -State 'progress' -Percent ([int]$p) -Message $a } } `
+        -OnLog $onLogShip
+    & $shipFlush
     Write-Host ""
-    Send-ZtpStatus -ServerUrl $cfg.ServerUrl -Identity $cfg.Identity -State 'succeeded' -Percent 100 -Message 'Complete'
+    Send-ZtpStatus -ServerUrl $cfg.ApiUrl -Identity $cfg.Identity -State 'succeeded' -Percent 100 -Message 'Complete'
 
     Write-Host "Deployment complete. Rebooting in 10s..."
     Start-Sleep -Seconds 10
@@ -132,7 +150,7 @@ try {
 catch {
     Write-Host ""
     Write-DeployLog "FATAL: $($_.Exception.Message)" 'ERROR' $onLog
-    try { Send-ZtpStatus -ServerUrl $cfg.ServerUrl -Identity $cfg.Identity -State 'failed' -Message $_.Exception.Message } catch {}
+    try { Send-ZtpStatus -ServerUrl $cfg.ApiUrl -Identity $cfg.Identity -State 'failed' -Message $_.Exception.Message } catch {}
     Write-Host "Deployment failed. Dropping to command prompt for diagnostics."
     exit 1
 }

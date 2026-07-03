@@ -45,6 +45,12 @@ $sync = [hashtable]::Synchronized(@{
 $identity = Get-MachineIdentity
 $ui.IdentityText.Text = "Serial: $($identity.Serial)   MAC: $($identity.Mac)"
 
+# Telemetry API base (report/log) for ALL modes, including interactive.
+$script:apiUrl = try {
+    $s = Get-ZtpSettings
+    if ($s.PSObject.Properties.Name -contains 'apiUrl' -and $s.apiUrl) { $s.apiUrl } else { $s.serverUrl }
+} catch { $null }
+
 # --- panel switching -------------------------------------------------------
 function Show-Panel([string]$name) {
     foreach ($p in 'ModePanel','ConfigPanel','ProgressPanel','PolicyPanel') {
@@ -89,8 +95,16 @@ function Start-DeploymentWorker([hashtable]$Plan, [string]$ServerUrl) {
     [void]$ps.AddScript({
         Import-Module (Join-Path $ScriptRoot 'DeployEngine.psm1') -Force
         . (Join-Path $ScriptRoot 'Get-ZtpConfig.ps1')
-        $onP = { param($p,$a) $sync.Percent = [int]$p; $sync.Stage = $a
-                 if ($ServerUrl) { Send-ZtpStatus -ServerUrl $ServerUrl -Identity $Identity -State 'progress' -Percent ([int]$p) -Message $a } }
+        $script:lastRpt = -100
+        $onP = { param($p,$a)
+            $sync.Percent = [int]$p; $sync.Stage = $a
+            # Throttle: report every >=5% or at completion, so telemetry never floods
+            # the API or stalls the deploy loop.
+            if ($ServerUrl -and ([int]$p -ge 100 -or ([int]$p - $script:lastRpt) -ge 5)) {
+                $script:lastRpt = [int]$p
+                Send-ZtpStatus -ServerUrl $ServerUrl -Identity $Identity -State 'progress' -Percent ([int]$p) -Message $a
+            }
+        }
         $onL = { param($m,$lvl) $sync.LogQueue.Enqueue(("[{0}] {1}" -f $lvl,$m)) }
         try {
             if ($ServerUrl) { Send-ZtpStatus -ServerUrl $ServerUrl -Identity $Identity -State 'started' -Message "Deploy begin" }
@@ -109,7 +123,10 @@ function Start-DeploymentWorker([hashtable]$Plan, [string]$ServerUrl) {
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromMilliseconds(200)
     $timer.Add_Tick({
-        while ($sync.LogQueue.Count -gt 0) { Add-Log ([string]$sync.LogQueue.Dequeue()) }
+        # Drain the log queue to the console AND batch-stream it to the API (/api/log).
+        $ship = New-Object System.Collections.Generic.List[string]
+        while ($sync.LogQueue.Count -gt 0) { $l = [string]$sync.LogQueue.Dequeue(); Add-Log $l; $ship.Add($l) }
+        if ($ServerUrl -and $ship.Count -gt 0) { Send-ZtpLog -ServerUrl $ServerUrl -Identity $identity -Lines $ship.ToArray() }
         $ui.Bar.Value = $sync.Percent
         $ui.PercentText.Text = "$($sync.Percent)%"
         if ($sync.Stage) { $ui.StageText.Text = $sync.Stage; $ui.StatusBar.Text = $sync.Stage }
@@ -235,7 +252,7 @@ function Start-AutoRoute {
     $decision = Invoke-PolicyEvaluation -PolicyUrl $settings.policyUrl -Inventory $inv `
                     -FailAction ($(if ($settings.PSObject.Properties.Name -contains 'policyFailAction') { $settings.policyFailAction } else { 'hold' }))
     Add-Log "Policy decision: $($decision.Action.ToUpper())"
-    Send-ZtpStatus -ServerUrl $settings.serverUrl -Identity $identity `
+    Send-ZtpStatus -ServerUrl $script:apiUrl -Identity $identity `
         -State ($(if ($decision.Allow) { 'progress' } else { 'failed' })) `
         -Message "Policy $($decision.Action): $(@($decision.Reasons) -join '; ')"
 
@@ -306,7 +323,7 @@ function Start-ZeroTouch {
         $script:secs--
         if ($script:secs -le 0) {
             $cd.Stop()
-            Start-DeploymentWorker -Plan $plan -ServerUrl $cfg.ServerUrl
+            Start-DeploymentWorker -Plan $plan -ServerUrl $cfg.ApiUrl
         } else {
             $ui.StageText.Text = "Zero-touch deploy to Disk $($disk.Index) in $script:secs s (close window to abort)"
         }
@@ -329,7 +346,7 @@ $ui.BtnDeploy.Add_Click({
     }
     try {
         $plan = New-InteractivePlan
-        Start-DeploymentWorker -Plan $plan -ServerUrl $null
+        Start-DeploymentWorker -Plan $plan -ServerUrl $script:apiUrl   # interactive now reports too
     } catch {
         $ui.StatusBar.Text = $_.Exception.Message
     }
