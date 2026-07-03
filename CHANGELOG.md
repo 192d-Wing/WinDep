@@ -8,6 +8,26 @@ and commits follow [Conventional Commits](https://www.conventionalcommits.org/en
 
 ## [Unreleased]
 
+### Added
+
+- **Telemetry backend** (`api/`) — a stateless Go/[Fiber](https://gofiber.io/) service that
+  receives deployment status (`/api/report`), streamed logs (`/api/log`), and inventory
+  (`/api/inventory`), emitting structured JSON to stdout plus Prometheus metrics (`/metrics`).
+- **Kubernetes + Cilium deployment** (`deploy/`) — Deployment, LoadBalancer Service, CPU HPA
+  (2–10 replicas), PodDisruptionBudget, and Cilium **anycast** via LB IPAM + BGP advertisement
+  (with an L2-announcement alternative).
+- **Client log streaming** — `Send-ZtpLog` batches deploy log lines to `/api/log`; the WPF UI
+  ships from its render loop and the headless path flushes in batches.
+
+### Changed
+
+- **Interactive deploys now report** status and logs (previously only zero-touch/headless did).
+- **Throttled telemetry** — progress reports are debounced to every ≥5% (or completion), and
+  status/log POSTs are best-effort and silent (logged to `windep.log`) so they never stall a
+  deploy or spam the console.
+- Added `apiUrl` to `ztp.config.json`; status/log endpoints now target the telemetry API base
+  (falling back to `serverUrl`).
+
 ## [0.1.0] - 2026-07-03
 
 Initial release: a WinPE-based Windows 11 deployment platform with a graphical UI,
