@@ -18,6 +18,13 @@ spec:
       labels:
         app: windep-web
     spec:
+      # Iron Bank nginx lives on registry1.dso.mil (Repo One), which requires auth.
+      # Create the secret with your Repo One creds (same as CI's REPO1_USER/REPO1):
+      #   kubectl -n windep create secret docker-registry repo1-pull \
+      #     --docker-server=registry1.dso.mil \
+      #     --docker-username=<REPO1_USER> --docker-password=<REPO1_TOKEN>
+      imagePullSecrets:
+        - name: repo1-pull
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
