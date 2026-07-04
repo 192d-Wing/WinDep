@@ -22,3 +22,10 @@ spec:
   # Must match the label the cluster's CiliumBGPPeerConfigs select
   # (families[].advertisements.matchLabels.advertise).
   advertiseGroup: "k3s-pod-cidrs"
+  # Deploy web-root PVC (holds config/, images/*.wim, boot/). Needs a ReadWriteMany
+  # StorageClass — set to whatever RWX class this cluster has (nfs/longhorn/ceph).
+  imagesStorageClass: "REPLACE-with-RWX-storageclass"
+  imagesSize: "20Gi"
+  # Admin (read-write) endpoint: its own VIP + the subnet allowed to reach it.
+  adminIP: "10.20.100.11"
+  adminSubnet: "10.20.0.0/24"

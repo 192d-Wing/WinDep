@@ -10,7 +10,7 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 replacements:
-  # anycast VIP -> Service annotation
+  # client deploy VIP -> windep-web Service annotation
   - source:
       kind: Variables
       name: windep-vars
@@ -18,9 +18,33 @@ replacements:
     targets:
       - select:
           kind: Service
-          name: windep-api
+          name: windep-web
         fieldPaths:
           - metadata.annotations.[io.cilium/lb-ipam-ips]
+
+  # admin VIP -> windep-admin Service annotation
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.adminIP
+    targets:
+      - select:
+          kind: Service
+          name: windep-admin
+        fieldPaths:
+          - metadata.annotations.[io.cilium/lb-ipam-ips]
+
+  # admin subnet -> windep-admin NetworkPolicy ingress ipBlock
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.adminSubnet
+    targets:
+      - select:
+          kind: NetworkPolicy
+          name: windep-admin
+        fieldPaths:
+          - spec.ingress.0.from.0.ipBlock.cidr
 
   # LB pool CIDR -> CiliumLoadBalancerIPPool
   - source:
@@ -45,3 +69,27 @@ replacements:
           name: windep-anycast
         fieldPaths:
           - metadata.labels.advertise
+
+  # RWX StorageClass -> deploy web-root PVC
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.imagesStorageClass
+    targets:
+      - select:
+          kind: PersistentVolumeClaim
+          name: windep-web-root
+        fieldPaths:
+          - spec.storageClassName
+
+  # PVC size -> deploy web-root PVC
+  - source:
+      kind: Variables
+      name: windep-vars
+      fieldPath: spec.imagesSize
+    targets:
+      - select:
+          kind: PersistentVolumeClaim
+          name: windep-web-root
+        fieldPaths:
+          - spec.resources.requests.storage

@@ -1,0 +1,21 @@
+# Lock the read-write admin surface to the admin subnet only. The client provisioning
+# VLAN reaches the RO nginx VIP, never this one. cidr is injected per-site from
+# vars.adminSubnet; widen/duplicate the ipBlock for multiple admin ranges.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: windep-admin
+  namespace: windep
+spec:
+  podSelector:
+    matchLabels:
+      app: windep-admin
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.0.0.0/24 # injected from vars.adminSubnet
+      ports:
+        - protocol: TCP
+          port: 8443

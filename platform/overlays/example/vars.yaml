@@ -24,3 +24,9 @@ spec:
   # Label group the cluster's CiliumBGPPeerConfigs export. Set to match THIS
   # cluster's peer configs (families[].advertisements.matchLabels.advertise).
   advertiseGroup: "windep-anycast"
+  # Deploy web-root PVC (config/, images/*.wim, boot/). Needs a ReadWriteMany class.
+  imagesStorageClass: "nfs-client"
+  imagesSize: "20Gi"
+  # Admin (read-write) endpoint: its own VIP + the subnet allowed to reach it.
+  adminIP: "10.0.100.11"
+  adminSubnet: "10.0.0.0/24"

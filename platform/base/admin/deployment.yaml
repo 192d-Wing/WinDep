@@ -1,0 +1,83 @@
+# WinDep admin — the ONLY read-write path to the deploy PV (Cloudscape UI + file
+# API). Single replica: it's the sole writer, low-traffic, admin-only. The client
+# nginx mounts the same PVC read-only; this one mounts it RW.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: windep-admin
+  namespace: windep
+  labels:
+    app: windep-admin
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # single RW writer — don't run two during rollout
+  selector:
+    matchLabels:
+      app: windep-admin
+  template:
+    metadata:
+      labels:
+        app: windep-admin
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001 # own the PV files so writes succeed
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admin
+          image: ghcr.io/192d-wing/windep-admin:0.1.1 # remapped per-overlay via images:
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: DATA_DIR
+              value: /srv/windep
+            - name: TLS_CERT
+              value: /tls/tls.crt
+            - name: TLS_KEY
+              value: /tls/tls.key
+            # Optional bearer token; NetworkPolicy is the primary control.
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: windep-admin-auth
+                  key: token
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: "1", memory: 256Mi }
+          volumeMounts:
+            - name: web-root
+              mountPath: /srv/windep # RW: uploads/deletes land here
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: web-root
+          persistentVolumeClaim:
+            claimName: windep-web-root
+        - name: tls
+          secret:
+            # Serving cert for admin.deploy.oopl.dev.mil, internal CA.
+            #   kubectl -n windep create secret tls windep-admin-tls --cert=admin.crt --key=admin.key
+            secretName: windep-admin-tls
+        - name: tmp
+          emptyDir: {}

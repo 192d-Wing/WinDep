@@ -1,0 +1,24 @@
+# The client-facing (read-only) deploy VIP. nginx serves static payloads locally and
+# proxies /api/* to the windep-api ClusterIP. The VIP is pinned from the Cilium LB
+# pool and advertised via BGP; the windep.dev/lb-anycast label is what the shared LB
+# pool + advertisement select (windep-admin carries it too, for its own VIP).
+apiVersion: v1
+kind: Service
+metadata:
+  name: windep-web
+  namespace: windep
+  labels:
+    app: windep-web
+    windep.dev/lb-anycast: "true"
+  annotations:
+    io.cilium/lb-ipam-ips: "10.0.100.10" # injected per-site from vars.anycastIP
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  selector:
+    app: windep-web
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP

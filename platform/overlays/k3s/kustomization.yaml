@@ -14,3 +14,5 @@ components:
 images:
   - name: ghcr.io/192d-wing/windep-api
     newTag: "0.1.1"
+  - name: ghcr.io/192d-wing/windep-admin
+    newTag: "0.1.1"

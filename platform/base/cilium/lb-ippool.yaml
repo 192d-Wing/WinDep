@@ -9,4 +9,4 @@ spec:
     - cidr: "10.0.100.0/24"
   serviceSelector:
     matchLabels:
-      app: windep-api
+      windep.dev/lb-anycast: "true" # both windep-web and windep-admin draw VIPs here

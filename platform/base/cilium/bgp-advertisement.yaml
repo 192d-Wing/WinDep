@@ -30,4 +30,4 @@ spec:
           - LoadBalancerIP
       selector:
         matchLabels:
-          app: windep-api
+          windep.dev/lb-anycast: "true" # advertise both the deploy + admin VIPs

@@ -11,6 +11,18 @@ resources:
   - k8s/service.yaml
   - k8s/hpa.yaml
   - k8s/poddisruptionbudget.yaml
+  # deploy web server (nginx) — serves the WIM/boot/config payload tree from a PV
+  # (read-only) and proxies /api/* to windep-api. Client-facing VIP.
+  - web/pvc.yaml
+  - web/nginx-conf.yaml
+  - web/deployment.yaml
+  - web/service.yaml
+  - web/poddisruptionbudget.yaml
+  # admin server (Cloudscape UI + Go API) — the read-write path to the same PV.
+  # Separate VIP, locked to the admin subnet by NetworkPolicy.
+  - admin/deployment.yaml
+  - admin/service.yaml
+  - admin/networkpolicy.yaml
   - cilium/lb-ippool.yaml
   - cilium/bgp-advertisement.yaml
   # cilium/l2announcement.yaml is an ALTERNATIVE to bgp-advertisement.yaml (L2, not anycast).
