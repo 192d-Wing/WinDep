@@ -1,0 +1,57 @@
+# WinDep admin — Cloudscape SPA + FIPS 140-3 Go backend, hardened Iron Bank UBI10.
+#
+# Build context is the admin module at ../admin (contains main.go + web/). Three
+# stages: build the React/Cloudscape UI, cross-compile the FIPS-enabled Go server,
+# assemble a non-root UBI10 runtime that serves the SPA and the RW file API.
+#
+#   podman build -f image/Containerfile.admin \
+#     --platform linux/amd64 \
+#     --build-arg BASE_IMAGE=registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2 \
+#     -t ghcr.io/192d-wing/windep-admin:0.1.1-amd64 admin
+
+ARG NODE_IMAGE=docker.io/library/node:20-alpine
+ARG BUILDER_IMAGE=docker.io/library/golang:1.25-alpine
+ARG BASE_IMAGE=registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
+ARG GOFIPS140=v1.0.0
+
+# --- web stage: build the Cloudscape SPA -----------------------------------
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web
+WORKDIR /web
+COPY web/package.json ./
+RUN npm install
+COPY web/ ./
+RUN npm run build   # -> /web/dist
+
+# --- build stage: FIPS Go backend ------------------------------------------
+FROM --platform=$BUILDPLATFORM ${BUILDER_IMAGE} AS build
+ARG TARGETOS
+ARG TARGETARCH
+ARG GOFIPS140
+WORKDIR /src
+ENV CGO_ENABLED=0 GOFIPS140=${GOFIPS140}
+COPY go.mod go.sum ./
+RUN go mod download
+COPY *.go ./
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -trimpath -o /out/windep-admin .
+
+# --- runtime stage: Iron Bank UBI10, non-root ------------------------------
+FROM ${BASE_IMAGE}
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.title="windep-admin" \
+      org.opencontainers.image.description="WinDep deploy admin API + Cloudscape UI (FIPS 140-3)" \
+      org.opencontainers.image.source="https://github.com/192d-Wing/WinDep" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+COPY --from=build /out/windep-admin /usr/local/bin/windep-admin
+COPY --from=web   /web/dist         /app/web
+
+ENV GODEBUG=fips140=on \
+    STATIC_DIR=/app/web \
+    DATA_DIR=/srv/windep \
+    LISTEN_ADDR=:8443
+
+USER 1001
+EXPOSE 8443
+ENTRYPOINT ["/usr/local/bin/windep-admin"]

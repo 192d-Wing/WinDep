@@ -48,6 +48,19 @@ jobs:
         working-directory: api
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
+      # --- admin module (Cloudscape UI backend) ---
+      - name: Vet (admin)
+        working-directory: admin
+        run: go vet ./...
+
+      - name: Build (admin)
+        working-directory: admin
+        run: go build ./...
+
+      - name: Test (admin, race + coverage)
+        working-directory: admin
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
       - name: Vulnerability scan
         working-directory: api
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
@@ -58,7 +71,7 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: api/coverage.out
+          files: api/coverage.out,admin/coverage.out
           slug: 192d-Wing/WinDep
 
       - name: SonarQube scan
