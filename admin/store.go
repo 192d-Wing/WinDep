@@ -26,7 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_de_serial ON deploy_event(serial);
 CREATE TABLE IF NOT EXISTS audit (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
   ts       TEXT NOT NULL,
-  action   TEXT NOT NULL,  -- upload|delete|mkdir|download|list|verify
+  action   TEXT NOT NULL,  -- upload|delete|mkdir|download|list|verify|config
   category TEXT, path TEXT,
   source   TEXT,           -- client IP (no user auth yet; NetworkPolicy is the control)
   size     INTEGER,

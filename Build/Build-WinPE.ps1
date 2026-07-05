@@ -32,6 +32,7 @@
 param(
     [Parameter(Mandatory)][string]$RootCaCert,                 # internal root CA .cer to trust
     [Parameter(Mandatory)][string]$ServerUrl,                  # e.g. https://deploy.jhics.org
+    [string]$ConfigKey,                                        # base64 32-byte AES key == admin CONFIG_KEY (decrypts secret config fields)
     [string]$OutputIso   = "$PSScriptRoot\..\out\WinDep.iso",
     [string]$WorkDir     = "$env:TEMP\WinDep_WinPE",
     [string]$DeploySrc   = "$PSScriptRoot\..\Deploy",
@@ -111,6 +112,14 @@ try {
     $cfg.serverUrl = $ServerUrl
     if ($cfg.defaults.imageUrl -match '^https://[^/]+') {
         $cfg.defaults.imageUrl = ($cfg.defaults.imageUrl -replace '^https://[^/]+', $ServerUrl)
+    }
+    # Bake the config-decryption key (must equal the admin's CONFIG_KEY). Validate it is
+    # a 32-byte base64 value so a typo fails the build instead of a live deploy.
+    if ($PSBoundParameters.ContainsKey('ConfigKey') -and $ConfigKey) {
+        try { $kb = [Convert]::FromBase64String($ConfigKey) } catch { throw "ConfigKey is not valid base64." }
+        if ($kb.Length -ne 32) { throw "ConfigKey must decode to 32 bytes (got $($kb.Length))." }
+        $cfg.configKey = $ConfigKey
+        Ok "Baked configKey (secret config fields will be decrypted at deploy time)"
     }
     ($cfg | ConvertTo-Json -Depth 8) | Set-Content $cfgPath -Encoding UTF8
 

@@ -28,8 +28,8 @@ type WIMImage struct {
 const (
 	wimMagic         = "MSWIM\x00\x00\x00"
 	wimHeaderLen     = 208
-	xmlReshdrOff     = 72     // byte offset of rhXmlData within the header
-	reshdrCompressed = 0x04   // RESHDR flag: resource is LZX/XPRESS compressed
+	xmlReshdrOff     = 72       // byte offset of rhXmlData within the header
+	reshdrCompressed = 0x04     // RESHDR flag: resource is LZX/XPRESS compressed
 	xmlSizeCap       = 64 << 20 // sanity bound on the XML metadata blob
 )
 

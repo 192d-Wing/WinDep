@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -35,6 +36,10 @@ var categories = map[string]bool{"images": true, "config": true, "boot": true}
 const errQuery = "query failed"
 const errNotFile = "not a file"
 const errMkdir = "mkdir failed"
+const errRead = "read failed"
+const errWrite = "write failed"
+const errNoName = "missing file name"
+const logSidecar = "sidecar write failed"
 
 type fileInfo struct {
 	Name     string `json:"name"`
@@ -130,7 +135,7 @@ func handleList(dataDir string) fiber.Handler {
 			if os.IsNotExist(err) {
 				return c.JSON([]fileInfo{})
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, "read failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errRead)
 		}
 		out := make([]fileInfo, 0, len(entries))
 		for _, e := range entries {
@@ -300,7 +305,7 @@ func handleUpload(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		rel := c.Params("*")
 		if rel == "" || strings.HasSuffix(rel, "/") {
-			return fiber.NewError(fiber.StatusBadRequest, "missing file name")
+			return fiber.NewError(fiber.StatusBadRequest, errNoName)
 		}
 		dest, err := resolvePath(dataDir, c.Params("category"), rel)
 		if err != nil {
@@ -311,11 +316,11 @@ func handleUpload(dataDir string) fiber.Handler {
 		}
 		sum, err := saveStream(dest, c.Context().RequestBodyStream())
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "write failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errWrite)
 		}
 		// The file is already durably renamed; a sidecar failure is non-fatal.
 		if err := writeSidecar(dest, sum); err != nil {
-			slog.Warn("sidecar write failed", "path", dest, "err", err.Error())
+			slog.Warn(logSidecar, "path", dest, "err", err.Error())
 		}
 		return c.SendStatus(fiber.StatusCreated)
 	}
@@ -358,7 +363,7 @@ func handleUploadOffset(dataDir string) fiber.Handler {
 func parseResume(c *fiber.Ctx, dataDir string) (dest string, offset, total int64, err error) {
 	rel := c.Params("*")
 	if rel == "" || strings.HasSuffix(rel, "/") {
-		return "", 0, 0, fiber.NewError(fiber.StatusBadRequest, "missing file name")
+		return "", 0, 0, fiber.NewError(fiber.StatusBadRequest, errNoName)
 	}
 	if dest, err = resolvePath(dataDir, c.Params("category"), rel); err != nil {
 		return "", 0, 0, err
@@ -402,7 +407,7 @@ func handleUploadResume(dataDir string) fiber.Handler {
 		newSize := cur + n
 		c.Set(hdrUploadOffset, strconv.FormatInt(newSize, 10))
 		if werr != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "write failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errWrite)
 		}
 		if newSize < total {
 			c.Set(hdrUploadComplete, "0")
@@ -420,7 +425,7 @@ func finishUpload(c *fiber.Ctx, tmp, dest string) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "finalize failed")
 	}
 	if err := writeSidecar(dest, sum); err != nil {
-		slog.Warn("sidecar write failed", "path", dest, "err", err.Error())
+		slog.Warn(logSidecar, "path", dest, "err", err.Error())
 	}
 	c.Set(hdrUploadComplete, "1")
 	return c.SendStatus(fiber.StatusOK)
@@ -543,13 +548,82 @@ func handleVerify(dataDir string) fiber.Handler {
 	}
 }
 
+// --- config handlers: secret-aware read/write of the config JSON tree ---
+
+// handleConfigGet returns a config file with every secret field masked to the KEEP
+// sentinel, so the browser editor learns a credential is set without ever receiving its
+// value (encrypted or plaintext). This is the only read path the editor uses.
+func handleConfigGet(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		dest, err := resolvePath(dataDir, "config", c.Params("*"))
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(dest)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fiber.NewError(fiber.StatusNotFound, "not found")
+			}
+			return fiber.NewError(fiber.StatusInternalServerError, errRead)
+		}
+		masked, err := maskConfigJSON(raw)
+		if err != nil {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "not valid config json")
+		}
+		c.Type("json")
+		return c.Send(masked)
+	}
+}
+
+// handleConfigPut writes a config file, encrypting secret fields at rest: a KEEP
+// sentinel preserves the stored (encrypted) value, a blank clears it, and any fresh
+// plaintext is encrypted with CONFIG_KEY before it ever touches the PV.
+func handleConfigPut(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		rel := c.Params("*")
+		if rel == "" || strings.HasSuffix(rel, "/") {
+			return fiber.NewError(fiber.StatusBadRequest, errNoName)
+		}
+		dest, err := resolvePath(dataDir, "config", rel)
+		if err != nil {
+			return err
+		}
+		body, err := readBody(c, 1<<20)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, errRead)
+		}
+		prev, _ := os.ReadFile(dest) // nil when creating a new config
+		out, err := encryptConfigJSON(body, prev)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid config json")
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, errMkdir)
+		}
+		sum, err := saveStream(dest, bytes.NewReader(out))
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, errWrite)
+		}
+		if err := writeSidecar(dest, sum); err != nil {
+			slog.Warn(logSidecar, "path", dest, "err", err.Error())
+		}
+		return c.SendStatus(fiber.StatusCreated)
+	}
+}
+
 // --- datastore-backed handlers: ingest (from windep-api) + review (for the UI) ---
+
+// readBody reads the (stream-mode) request body, bounded by max so a hostile body can't
+// buffer gigabytes and OOM the pod.
+func readBody(c *fiber.Ctx, max int64) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(c.Context().RequestBodyStream(), max))
+}
 
 // readJSON decodes the (stream-mode) request body into v. StreamRequestBody makes
 // c.Body()/BodyParser unreliable, so read the stream directly, bounded by a small
 // cap so a runaway/hostile ingest body can't buffer gigabytes and OOM the pod.
 func readJSON(c *fiber.Ctx, v any) error {
-	body, err := io.ReadAll(io.LimitReader(c.Context().RequestBodyStream(), 1<<20)) // 1 MiB
+	body, err := readBody(c, 1<<20) // 1 MiB
 	if err != nil {
 		return err
 	}
@@ -662,6 +736,9 @@ func classify(c *fiber.Ctx) (action, category, p string, size int64) {
 		return "download", c.Params("category"), c.Params("*"), int64(max(0, c.Response().Header.ContentLength()))
 	case method == fiber.MethodPost && strings.HasPrefix(pth, "/api/verify/"):
 		return "verify", c.Params("category"), c.Params("*"), 0
+	case method == fiber.MethodPut && strings.HasPrefix(pth, "/api/config/"):
+		// content never logged, only the fact of a config write (creds are masked)
+		return "config", "config", c.Params("*"), 0
 	case method == fiber.MethodGet && pth == "/api/files":
 		return "list", c.Query("category"), c.Query("prefix"), 0
 	}
@@ -711,13 +788,16 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 	const routeFile = "/files/:category/*"
 	api.Get("/files", handleList(dataDir))
 	api.Put(routeFile, handleUpload(dataDir))
-	api.Head(routeFile, handleUploadOffset(dataDir))    // resume: query staged offset
-	api.Patch(routeFile, handleUploadResume(dataDir))   // resume: append a chunk
+	api.Head(routeFile, handleUploadOffset(dataDir))  // resume: query staged offset
+	api.Patch(routeFile, handleUploadResume(dataDir)) // resume: append a chunk
 	api.Delete(routeFile, handleDelete(dataDir))
 	api.Post("/folders/:category/*", handleMkdir(dataDir))
 	api.Get("/download/:category/*", handleDownload(dataDir))
 	api.Get("/wiminfo/:category/*", handleWIMInfo(dataDir))
 	api.Post("/verify/:category/*", handleVerify(dataDir))
+	// secret-aware config editor (masks creds on read, encrypts them on write)
+	api.Get("/config/*", handleConfigGet(dataDir))
+	api.Put("/config/*", handleConfigPut(dataDir))
 
 	app.Static("/", staticDir, fiber.Static{Index: "index.html"})
 	app.Use(func(c *fiber.Ctx) error {
@@ -732,6 +812,15 @@ func main() {
 	dataDir := getenv("DATA_DIR", "/srv/windep")
 	staticDir := getenv("STATIC_DIR", "/app/web")
 	addr := getenv("LISTEN_ADDR", ":8443")
+
+	switch {
+	case secretsEnabled():
+		slog.Info("CONFIG_KEY set - config secrets encrypted at rest")
+	case os.Getenv(configKeyEnv) != "":
+		slog.Warn("CONFIG_KEY is malformed (need base64 of 32 bytes) - config secrets NOT encrypted")
+	default:
+		slog.Warn("CONFIG_KEY not set - config secrets stored in plaintext (masked in UI only)")
+	}
 
 	st, err := openStore(getenv("DB_PATH", "/data/windep.db"))
 	if err != nil {

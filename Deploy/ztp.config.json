@@ -4,6 +4,9 @@
   "serverUrl": "https://deploy.jhics.org",
   "apiUrl": "https://windep-api.jhics.org",
 
+  "_configKey": "base64 32-byte AES key matching the admin's CONFIG_KEY; decrypts secret config fields (LOCALADMINPASS/DOMAINPASS) stored encrypted at rest on the server. Baked in by Build-WinPE.ps1 -ConfigKey; blank = plaintext configs only.",
+  "configKey": "",
+
   "policyUrl": "https://opa.jhics.org:8181/v1/data/windep/decision",
   "policyFailAction": "hold",
   "collectInventory": true,

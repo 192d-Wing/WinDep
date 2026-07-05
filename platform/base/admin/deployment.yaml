@@ -47,6 +47,18 @@ spec:
                   name: windep-admin-auth
                   key: token
                   optional: true
+            # Base64 32-byte AES key that encrypts secret config fields (LOCALADMINPASS/
+            # DOMAINPASS) at rest on the PV. MUST equal the key baked into boot.wim
+            # (Build-WinPE.ps1 -ConfigKey). Optional: unset = creds stored plaintext
+            # (still masked in the UI). Only set this once WinPE carries the matching key.
+            #   key=$(openssl rand -base64 32)
+            #   kubectl -n windep create secret generic windep-admin-config-key --from-literal=key="$key"
+            - name: CONFIG_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: windep-admin-config-key
+                  key: key
+                  optional: true
             # Uploads stream to disk, but a long multi-GB transfer lets Go's heap
             # overshoot the cgroup cap between GCs and OOMKill mid-upload. GOMEMLIMIT
             # makes the runtime collect aggressively as it nears the limit.

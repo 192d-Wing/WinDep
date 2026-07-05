@@ -14,6 +14,14 @@ import ColumnLayout from "@cloudscape-design/components/column-layout";
 import { apiPath } from "./util";
 import { WINDOWS_TIMEZONES } from "./timezones";
 
+// The admin masks stored credentials to this sentinel on read; sending it back on save
+// tells the server to keep the existing (encrypted) value. Must match secret.go.
+const KEEP = "__KEEP__";
+
+// Secret-aware config URL. The /api/config endpoint masks credentials on read and
+// encrypts them at rest on write, so the browser never handles plaintext-on-PV secrets.
+const cfgUrl = (rel: string) => `/api/config/${rel.split("/").map(encodeURIComponent).join("/")}`;
+
 // A per-machine config is a sparse override of default.json: any field left blank
 // here is omitted from the saved JSON so it inherits the default.
 interface Fields {
@@ -31,6 +39,10 @@ interface Fields {
   DOMAINOU: string;
   DOMAINUSER: string;
   DOMAINPASS: string;
+  // UI-only: whether a stored (masked) password exists, so a blank field means
+  // "keep it" rather than "clear it".
+  localAdminPassSet: boolean;
+  domainPassSet: boolean;
 }
 
 const EMPTY: Fields = {
@@ -48,6 +60,8 @@ const EMPTY: Fields = {
   DOMAINOU: "",
   DOMAINUSER: "",
   DOMAINPASS: "",
+  localAdminPassSet: false,
+  domainPassSet: false,
 };
 
 const MODES = [
@@ -86,7 +100,7 @@ async function listImages(): Promise<string[]> {
 // build full URLs. Falls back to the admin's own origin if default.json is unset.
 async function imageBase(): Promise<string> {
   try {
-    const r = await fetch(apiPath("download", "config", "default.json"));
+    const r = await fetch(cfgUrl("default.json"));
     if (r.ok) {
       const c = await r.json();
       if (typeof c.imageUrl === "string" && c.imageUrl) return new URL(c.imageUrl).origin;
@@ -104,19 +118,37 @@ interface Row {
 
 const MACHINES_PREFIX = "machines";
 
-// build the sparse override JSON, omitting empty fields so they inherit default.json.
-function toConfig(f: Fields): Record<string, unknown> {
+// secretOut maps a password field + its "was set" flag to what to send: a freshly-typed
+// value (encrypted server-side), KEEP to preserve the stored one, or undefined to omit.
+function secretOut(value: string, wasSet: boolean): string | undefined {
+  if (value) return value; // typed a new password (sent untrimmed — spaces may be intentional)
+  return wasSet ? KEEP : undefined;
+}
+
+// buildUnattend assembles the sparse unattend block: non-empty plain fields, plus the
+// secret-aware password fields (new value / KEEP / omitted).
+function buildUnattend(f: Fields): Record<string, string> {
   const unattend: Record<string, string> = {};
-  for (const k of ["TIMEZONE", "LOCALADMINUSER", "LOCALADMINPASS"] as const) {
+  for (const k of ["TIMEZONE", "LOCALADMINUSER"] as const) {
     if (f[k].trim()) unattend[k] = f[k].trim();
   }
+  const localPass = secretOut(f.LOCALADMINPASS, f.localAdminPassSet);
+  if (localPass !== undefined) unattend.LOCALADMINPASS = localPass;
   // Domain fields are only written when the join toggle is on; otherwise they are
   // omitted entirely (so a machine inherits default.json / stays workgroup-joined).
   if (f.joinDomain) {
-    for (const k of ["JOINDOMAIN", "DOMAINOU", "DOMAINUSER", "DOMAINPASS"] as const) {
+    for (const k of ["JOINDOMAIN", "DOMAINOU", "DOMAINUSER"] as const) {
       if (f[k].trim()) unattend[k] = f[k].trim();
     }
+    const domainPass = secretOut(f.DOMAINPASS, f.domainPassSet);
+    if (domainPass !== undefined) unattend.DOMAINPASS = domainPass;
   }
+  return unattend;
+}
+
+// build the sparse override JSON, omitting empty fields so they inherit default.json.
+function toConfig(f: Fields): Record<string, unknown> {
+  const unattend = buildUnattend(f);
   const cfg: Record<string, unknown> = {};
   if (f.mode) cfg.mode = f.mode;
   if (f.targetDisk.trim()) cfg.targetDisk = f.targetDisk.trim();
@@ -129,6 +161,10 @@ function toConfig(f: Fields): Record<string, unknown> {
 
 function fromConfig(serial: string, c: Record<string, any>): Fields {
   const u = c.unattend ?? {};
+  // Secrets arrive masked (KEEP) from /api/config; show the field blank but remember it
+  // is set so an untouched save preserves it rather than clearing it.
+  const localSet = u.LOCALADMINPASS === KEEP;
+  const domainSet = u.DOMAINPASS === KEEP;
   return {
     ...EMPTY,
     serial,
@@ -140,11 +176,13 @@ function fromConfig(serial: string, c: Record<string, any>): Fields {
     joinDomain: Boolean(u.JOINDOMAIN),
     TIMEZONE: u.TIMEZONE ?? "",
     LOCALADMINUSER: u.LOCALADMINUSER ?? "",
-    LOCALADMINPASS: u.LOCALADMINPASS ?? "",
+    LOCALADMINPASS: localSet ? "" : (u.LOCALADMINPASS ?? ""),
     JOINDOMAIN: u.JOINDOMAIN ?? "",
     DOMAINOU: u.DOMAINOU ?? "",
     DOMAINUSER: u.DOMAINUSER ?? "",
-    DOMAINPASS: u.DOMAINPASS ?? "",
+    DOMAINPASS: domainSet ? "" : (u.DOMAINPASS ?? ""),
+    localAdminPassSet: localSet,
+    domainPassSet: domainSet,
   };
 }
 
@@ -171,7 +209,7 @@ export default function MachinesTab() {
         jsons.map(async (f) => {
           const serial = f.name.replace(/\.json$/, "");
           try {
-            const cr = await fetch(apiPath("download", "config", `${MACHINES_PREFIX}/${f.name}`));
+            const cr = await fetch(cfgUrl(`${MACHINES_PREFIX}/${f.name}`));
             const c = cr.ok ? await cr.json() : {};
             return { serial, computerName: c.computerName ?? "" };
           } catch {
@@ -210,7 +248,7 @@ export default function MachinesTab() {
   async function openEdit(serial: string) {
     setError(null);
     try {
-      const r = await fetch(apiPath("download", "config", `${MACHINES_PREFIX}/${serial}.json`));
+      const r = await fetch(cfgUrl(`${MACHINES_PREFIX}/${serial}.json`));
       if (!r.ok) throw new Error(`load failed (${r.status})`);
       setEditing(fromConfig(serial, await r.json()));
       setIsNew(false);
@@ -235,10 +273,7 @@ export default function MachinesTab() {
     setError(null);
     try {
       const body = JSON.stringify(toConfig(editing), null, 2);
-      const r = await fetch(apiPath("files", "config", `${MACHINES_PREFIX}/${serial}.json`), {
-        method: "PUT",
-        body,
-      });
+      const r = await fetch(cfgUrl(`${MACHINES_PREFIX}/${serial}.json`), { method: "PUT", body });
       if (!r.ok) throw new Error(`save failed (${r.status})`);
       setEditing(null);
       await refresh();
@@ -406,8 +441,16 @@ export default function MachinesTab() {
               <FormField label="Local admin user">
                 <Input value={editing.LOCALADMINUSER} onChange={(e) => set({ LOCALADMINUSER: e.detail.value })} />
               </FormField>
-              <FormField label="Local admin password">
-                <Input type="password" value={editing.LOCALADMINPASS} onChange={(e) => set({ LOCALADMINPASS: e.detail.value })} />
+              <FormField
+                label="Local admin password"
+                description={editing.localAdminPassSet ? "Stored (encrypted). Leave blank to keep it." : undefined}
+              >
+                <Input
+                  type="password"
+                  value={editing.LOCALADMINPASS}
+                  placeholder={editing.localAdminPassSet ? "•••••••• unchanged" : undefined}
+                  onChange={(e) => set({ LOCALADMINPASS: e.detail.value })}
+                />
               </FormField>
             </ColumnLayout>
 
@@ -427,8 +470,16 @@ export default function MachinesTab() {
                 <FormField label="Domain join user">
                   <Input value={editing.DOMAINUSER} onChange={(e) => set({ DOMAINUSER: e.detail.value })} placeholder="svc-domainjoin" />
                 </FormField>
-                <FormField label="Domain join password">
-                  <Input type="password" value={editing.DOMAINPASS} onChange={(e) => set({ DOMAINPASS: e.detail.value })} />
+                <FormField
+                  label="Domain join password"
+                  description={editing.domainPassSet ? "Stored (encrypted). Leave blank to keep it." : undefined}
+                >
+                  <Input
+                    type="password"
+                    value={editing.DOMAINPASS}
+                    placeholder={editing.domainPassSet ? "•••••••• unchanged" : undefined}
+                    onChange={(e) => set({ DOMAINPASS: e.detail.value })}
+                  />
                 </FormField>
               </ColumnLayout>
             )}

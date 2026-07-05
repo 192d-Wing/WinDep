@@ -36,6 +36,15 @@ tracks what's done and what's next.
   dropped upload from the server's confirmed offset with bounded, backing-off retries
   instead of restarting from zero; a cancelled upload's `.part` is swept on delete. Only
   the finalize is audited, not the per-chunk chatter.
+- **Secret-aware config** — domain-join creds are encrypted at rest on the PV, never
+  plaintext. The admin encrypts secret `unattend` fields (`*PASS`) with `CONFIG_KEY`
+  (a k8s Secret) into an `enc:v1:` envelope — **AES-256-CBC + HMAC-SHA256**, not AES-GCM,
+  so it interoperates with WinPE's .NET-Framework runtime. The `/api/config` editor path
+  masks creds to a `__KEEP__` sentinel on read (the browser never receives a value) and,
+  on write, keeps the stored value on `__KEEP__`, clears on blank, or encrypts fresh
+  input. WinPE decrypts at deploy time via `Unprotect-ZtpSecret` using the same key baked
+  into `boot.wim` (`Build-WinPE.ps1 -ConfigKey`); plaintext configs still work, so rollout
+  is staged. Config writes are audited (path only, never content).
 
 ## Next
 
@@ -50,8 +59,6 @@ tracks what's done and what's next.
 
 ### Tier 2 — deployment-workflow depth
 
-- [ ] **Secret-aware config** — domain-join creds live in plaintext on the PV; move
-  to k8s Secrets / encryption and mask them in the UI and audit.
 - [ ] **Boot-artifact flow** — fold `Build-WinPE.ps1`'s `boot/` output (boot.wim,
   bootmgfw.efi, BCD) into the admin so the whole boot chain is managed in one place.
 

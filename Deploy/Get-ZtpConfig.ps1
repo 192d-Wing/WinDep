@@ -44,6 +44,54 @@ function Get-ZtpSettings {
     Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
+function Unprotect-ZtpSecret {
+    <#
+      Decrypts a value the admin encrypted at rest (config secret fields never sit in
+      plaintext on the server PV). Envelope, matching admin/secret.go:
+          "enc:v1:" + base64( iv[16] || ciphertext || hmac[32] )
+          encKey = HMAC-SHA256(master,"enc"),  macKey = HMAC-SHA256(master,"mac")
+          hmac   = HMAC-SHA256(macKey, iv||ciphertext)   (encrypt-then-MAC)
+      AES-256-CBC + HMAC-SHA256 (not AES-GCM) so it runs on WinPE's .NET Framework.
+      A non-envelope value is returned unchanged, so plaintext configs still work.
+    #>
+    param([string]$Value, [byte[]]$MasterKey)
+    if (-not $Value -or -not $Value.StartsWith('enc:v1:')) { return $Value }
+    if (-not $MasterKey) { throw "encrypted config value but no configKey in ztp.config.json" }
+
+    $blob = [Convert]::FromBase64String($Value.Substring('enc:v1:'.Length))
+    if ($blob.Length -lt (16 + 32)) { throw "ciphertext too short" }
+
+    $macLen = 32; $ivLen = 16
+    $iv  = $blob[0..($ivLen-1)]
+    $ct  = $blob[$ivLen..($blob.Length-$macLen-1)]
+    $tag = $blob[($blob.Length-$macLen)..($blob.Length-1)]
+
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256
+    try {
+        $hmac.Key = $MasterKey; $encKey = $hmac.ComputeHash([Text.Encoding]::ASCII.GetBytes('enc'))
+        $hmac.Key = $MasterKey; $macKey = $hmac.ComputeHash([Text.Encoding]::ASCII.GetBytes('mac'))
+        # verify-then-decrypt over iv||ct
+        $macIn = New-Object byte[] ($iv.Length + $ct.Length)
+        [Array]::Copy($iv, 0, $macIn, 0, $iv.Length)
+        [Array]::Copy($ct, 0, $macIn, $iv.Length, $ct.Length)
+        $hmac.Key = $macKey; $calc = $hmac.ComputeHash($macIn)
+        $ok = $calc.Length -eq $tag.Length
+        for ($i = 0; $i -lt $tag.Length; $i++) { if ($calc[$i] -ne $tag[$i]) { $ok = $false } }
+        if (-not $ok) { throw "HMAC mismatch (wrong configKey or tampered value)" }
+    } finally { $hmac.Dispose() }
+
+    $aes = [System.Security.Cryptography.Aes]::Create()
+    try {
+        $aes.KeySize = 256; $aes.Mode = 'CBC'; $aes.Padding = 'PKCS7'
+        $aes.Key = $encKey; $aes.IV = $iv
+        $dec = $aes.CreateDecryptor()
+        try {
+            $plain = $dec.TransformFinalBlock($ct, 0, $ct.Length)
+            return [Text.Encoding]::UTF8.GetString($plain)
+        } finally { $dec.Dispose() }
+    } finally { $aes.Dispose() }
+}
+
 function Invoke-JsonGet {
     param([Parameter(Mandatory)][string]$Uri)
     Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
@@ -98,9 +146,20 @@ function Get-ZtpConfig {
     function pick($a, $b, $fallback) { if ($null -ne $a) { $a } elseif ($null -ne $b) { $b } else { $fallback } }
     $sd = $settings.defaults
 
+    # configKey (base64, 32 bytes) decrypts secret fields the admin stored encrypted at
+    # rest. Absent/blank = plaintext configs only (pre-encryption clusters keep working).
+    $masterKey = $null
+    if ($settings.PSObject.Properties.Name -contains 'configKey' -and $settings.configKey) {
+        try { $masterKey = [Convert]::FromBase64String($settings.configKey) } catch { Write-Warning "configKey is not valid base64; ignoring" }
+    }
+
     $unattend = @{}
     if ($cfg -and $cfg.PSObject.Properties.Name -contains 'unattend' -and $cfg.unattend) {
-        foreach ($p in $cfg.unattend.PSObject.Properties) { $unattend[$p.Name] = $p.Value }
+        foreach ($p in $cfg.unattend.PSObject.Properties) {
+            $v = $p.Value
+            if ($v -is [string] -and $v.StartsWith('enc:v1:')) { $v = Unprotect-ZtpSecret -Value $v -MasterKey $masterKey }
+            $unattend[$p.Name] = $v
+        }
     }
 
     $nameTemplate = pick ($cfg.computerName) ($sd.computerName) 'WKS-{SERIAL}'
