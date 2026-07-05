@@ -20,6 +20,7 @@ spec:
         prometheus.io/port: "8443"
         prometheus.io/path: "/metrics"
     spec:
+      automountServiceAccountToken: false # never calls the k8s API
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -49,13 +50,23 @@ spec:
             # (logs/audit review). Unset = feature off; failures never affect WinPE.
             - name: ADMIN_INGEST_URL
               value: "https://windep-admin.windep.svc.cluster.local:443/api"
+            # Must match the admin's ADMIN_TOKEN when set, or ingest gets 401. Same
+            # optional secret both sides read, so hardening stays consistent.
+            - name: ADMIN_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: windep-admin-auth
+                  key: token
+                  optional: true
           resources:
             requests:
               cpu: 100m
               memory: 64Mi
+              ephemeral-storage: 32Mi
             limits:
               cpu: 500m
               memory: 128Mi
+              ephemeral-storage: 128Mi
           readinessProbe:
             httpGet:
               path: /readyz

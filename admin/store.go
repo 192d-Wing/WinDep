@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS deploy_event (
   level   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_de_serial ON deploy_event(serial);
-CREATE INDEX IF NOT EXISTS idx_de_id     ON deploy_event(id);
 
 CREATE TABLE IF NOT EXISTS audit (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,20 +31,34 @@ CREATE TABLE IF NOT EXISTS audit (
   source   TEXT,           -- client IP (no user auth yet; NetworkPolicy is the control)
   size     INTEGER,
   status   INTEGER         -- HTTP status of the operation
-);
-CREATE INDEX IF NOT EXISTS idx_au_id ON audit(id);`
+);`
 
 func openStore(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // serialize access; SQLite is single-writer
+	// WAL lets readers run concurrently with the single writer, so allow a small
+	// pool (UI queries no longer block behind ingest inserts); busy_timeout retries
+	// the rare writer-vs-writer contention.
+	db.SetMaxOpenConns(4)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return &Store{db: db}, nil
+}
+
+// prune caps each table to its newest maxRows, bounding growth on the fixed volume.
+func (s *Store) prune(maxRows int) error {
+	for _, tbl := range []string{"deploy_event", "audit"} {
+		if _, err := s.db.Exec(
+			`DELETE FROM `+tbl+` WHERE id NOT IN (SELECT id FROM `+tbl+` ORDER BY id DESC LIMIT ?)`,
+			maxRows); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) close() error { return s.db.Close() }
@@ -57,10 +70,16 @@ func (s *Store) addStatus(r StatusReport) error {
 	return err
 }
 
-func (s *Store) addLog(serial, mac, level, message string) error {
+// addLog stores a WinPE log line. ts is the device-provided event time; it falls
+// back to server-receive time only when the agent didn't supply one, so ordering
+// reflects when the event happened on the machine, not when the batch was processed.
+func (s *Store) addLog(serial, mac, level, message, ts string) error {
+	if ts == "" {
+		ts = nowUTC()
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO deploy_event(ts,kind,serial,mac,level,message) VALUES(?,?,?,?,?,?)`,
-		nowUTC(), "log", serial, mac, level, message)
+		ts, "log", serial, mac, level, message)
 	return err
 }
 
@@ -90,13 +109,13 @@ func (s *Store) deployEvents(serial string, limit int) ([]map[string]any, error)
 	out := []map[string]any{}
 	for rows.Next() {
 		var ts, kind string
-		var serial, mac, state, message, model, level sql.NullString
+		var serialCol, mac, state, message, model, level sql.NullString
 		var percent sql.NullInt64
-		if err := rows.Scan(&ts, &kind, &serial, &mac, &state, &percent, &message, &model, &level); err != nil {
+		if err := rows.Scan(&ts, &kind, &serialCol, &mac, &state, &percent, &message, &model, &level); err != nil {
 			return nil, err
 		}
 		out = append(out, map[string]any{
-			"ts": ts, "kind": kind, "serial": serial.String, "mac": mac.String,
+			"ts": ts, "kind": kind, "serial": serialCol.String, "mac": mac.String,
 			"state": state.String, "percent": percent.Int64, "message": message.String,
 			"model": model.String, "level": level.String,
 		})

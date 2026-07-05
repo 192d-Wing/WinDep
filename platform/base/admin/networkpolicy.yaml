@@ -14,9 +14,20 @@ spec:
   policyTypes:
     - Ingress
   ingress:
+    # admin UI reachable from the admin subnet(s)
     - from:
         - ipBlock:
             cidr: 10.0.0.0/8 # default; overlays patch this to the real admin range(s)
+      ports:
+        - protocol: TCP
+          port: 8443
+    # windep-api pods forward deployment telemetry to /api/ingest. Kept in the base
+    # (not just the k3s patch) so every overlay allows ingest even after tightening
+    # the ipBlock above. Overlay patches that replace `ingress` must re-include this.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: windep-api
       ports:
         - protocol: TCP
           port: 8443

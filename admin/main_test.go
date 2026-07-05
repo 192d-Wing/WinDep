@@ -154,3 +154,51 @@ func TestAuditTrail(t *testing.T) {
 		}
 	}
 }
+
+// a failed op must be audited with its real status, not the default 200.
+func TestAuditRecordsFailureStatus(t *testing.T) {
+	app := testApp(t, t.TempDir())
+	r, _ := app.Test(httptest.NewRequest("DELETE", "/api/files/images/nope.wim", nil), -1)
+	if r.StatusCode != 404 {
+		t.Fatalf("want 404 deleting missing file, got %d", r.StatusCode)
+	}
+	r, _ = app.Test(httptest.NewRequest("GET", "/api/audit", nil), -1)
+	b, _ := io.ReadAll(r.Body)
+	var entries []map[string]any
+	_ = json.Unmarshal(b, &entries)
+	found := false
+	for _, e := range entries {
+		if e["action"] == "delete" {
+			found = true
+			if got := int(e["status"].(float64)); got != 404 {
+				t.Fatalf("audit status = %d, want 404 (regression: failures logged as 200)", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no delete audit entry recorded")
+	}
+}
+
+func TestPrune(t *testing.T) {
+	st, err := openStore(filepath.Join(t.TempDir(), "p.db"))
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer st.close()
+	for i := 0; i < 10; i++ {
+		if err := st.addAudit("list", "images", "", "127.0.0.1", 0, 200); err != nil {
+			t.Fatalf("addAudit: %v", err)
+		}
+	}
+	if err := st.prune(3); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	entries, err := st.auditEntries(100)
+	if err != nil {
+		t.Fatalf("auditEntries: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("want 3 rows after prune(3), got %d", len(entries))
+	}
+}

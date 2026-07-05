@@ -120,13 +120,17 @@ func handleReadyz(c *fiber.Ctx) error {
 // in a goroutine bounded by the client timeout. The in-cluster hop skips TLS verify
 // (the admin serving cert is for the external hostname, not its ClusterIP/DNS).
 var (
-	adminIngestURL = os.Getenv("ADMIN_INGEST_URL")
-	ingestClient   = &http.Client{
+	adminIngestURL   = os.Getenv("ADMIN_INGEST_URL")
+	adminIngestToken = os.Getenv("ADMIN_INGEST_TOKEN") // must match admin ADMIN_TOKEN when set
+	ingestClient     = &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // east-west, network-isolated
 		},
 	}
+	// Bound in-flight forwards so a slow/unreachable admin can't pile up goroutines
+	// and sockets during a mass deploy; excess is dropped (telemetry is best-effort).
+	ingestSem = make(chan struct{}, 64)
 )
 
 func forwardIngest(path string, payload any) {
@@ -137,13 +141,31 @@ func forwardIngest(path string, payload any) {
 	if err != nil {
 		return
 	}
+	select {
+	case ingestSem <- struct{}{}:
+	default:
+		slog.Warn("ingest forward dropped: too many in flight")
+		return
+	}
 	go func() {
-		resp, err := ingestClient.Post(adminIngestURL+path, "application/json", bytes.NewReader(body))
+		defer func() { <-ingestSem }()
+		req, err := http.NewRequest(http.MethodPost, adminIngestURL+path, bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if adminIngestToken != "" {
+			req.Header.Set("Authorization", "Bearer "+adminIngestToken)
+		}
+		resp, err := ingestClient.Do(req)
 		if err != nil {
 			slog.Warn("ingest forward failed", "err", err.Error())
 			return
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			slog.Warn("ingest forward rejected", "status", resp.StatusCode, "path", path)
+		}
 	}()
 }
 

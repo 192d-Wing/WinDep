@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -270,9 +271,10 @@ func handleDownload(dataDir string) fiber.Handler {
 // --- datastore-backed handlers: ingest (from windep-api) + review (for the UI) ---
 
 // readJSON decodes the (stream-mode) request body into v. StreamRequestBody makes
-// c.Body()/BodyParser unreliable, so read the stream directly; ingest payloads are small.
+// c.Body()/BodyParser unreliable, so read the stream directly, bounded by a small
+// cap so a runaway/hostile ingest body can't buffer gigabytes and OOM the pod.
 func readJSON(c *fiber.Ctx, v any) error {
-	body, err := io.ReadAll(c.Context().RequestBodyStream())
+	body, err := io.ReadAll(io.LimitReader(c.Context().RequestBodyStream(), 1<<20)) // 1 MiB
 	if err != nil {
 		return err
 	}
@@ -299,7 +301,7 @@ func handleIngestLog(st *Store) fiber.Handler {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid json")
 		}
 		for _, l := range b.Lines {
-			if err := st.addLog(b.Serial, b.Mac, l.Level, l.Message); err != nil {
+			if err := st.addLog(b.Serial, b.Mac, l.Level, l.Message, l.Ts); err != nil {
 				return fiber.NewError(fiber.StatusInternalServerError, "store failed")
 			}
 		}
@@ -334,7 +336,17 @@ func auditMW(st *Store) fiber.Handler {
 		err := c.Next()
 		action, category, p, size := classify(c)
 		if action != "" {
-			_ = st.addAudit(action, category, p, c.IP(), size, c.Response().StatusCode())
+			// On error the ErrorHandler sets the real status AFTER this middleware
+			// returns, so c.Response().StatusCode() is still the default 200 here —
+			// take the code from the error instead so failures aren't logged as 200.
+			status := c.Response().StatusCode()
+			if err != nil {
+				status = fiber.StatusInternalServerError
+				if fe, ok := err.(*fiber.Error); ok {
+					status = fe.Code
+				}
+			}
+			_ = st.addAudit(action, category, p, c.IP(), size, status)
 		}
 		return err
 	}
@@ -424,6 +436,22 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.close()
+
+	// Bound growth on the fixed DB volume: keep the newest maxRows in each table.
+	maxRows := 200_000
+	if n, err := strconv.Atoi(os.Getenv("DB_MAX_ROWS")); err == nil && n > 0 {
+		maxRows = n
+	}
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		_ = st.prune(maxRows) // once at startup
+		for range t.C {
+			if err := st.prune(maxRows); err != nil {
+				slog.Warn("prune failed", "err", err.Error())
+			}
+		}
+	}()
 
 	app := newApp(dataDir, staticDir, st)
 
