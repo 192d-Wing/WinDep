@@ -20,6 +20,7 @@ spec:
       labels:
         app: windep-admin
     spec:
+      automountServiceAccountToken: false # never calls the k8s API
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -46,6 +47,11 @@ spec:
                   name: windep-admin-auth
                   key: token
                   optional: true
+            # Uploads stream to disk, but a long multi-GB transfer lets Go's heap
+            # overshoot the cgroup cap between GCs and OOMKill mid-upload. GOMEMLIMIT
+            # makes the runtime collect aggressively as it nears the limit.
+            - name: GOMEMLIMIT
+              value: "460MiB"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -60,8 +66,11 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 10
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits:   { cpu: "1", memory: 256Mi }
+            # GOMEMLIMIT (460MiB) bounds the Go heap; the extra room to 1Gi is
+            # reclaimable page cache while writing multi-GB WIMs to the PV. Uploads
+            # land on the PV, not ephemeral storage, so the local budget stays small.
+            requests: { cpu: 50m, memory: 128Mi, ephemeral-storage: 64Mi }
+            limits:   { cpu: "1", memory: 1Gi, ephemeral-storage: 256Mi }
           volumeMounts:
             - name: web-root
               mountPath: /srv/windep # RW: uploads/deletes land here
