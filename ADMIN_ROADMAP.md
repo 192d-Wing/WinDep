@@ -29,6 +29,13 @@ tracks what's done and what's next.
   straight from the WIM header/XML (no DISM — the admin container is Linux), the image
   catalogue: index, name, edition, arch, and build. A "Verify before serve" action
   re-hashes on disk and flags any drift from the recorded digest; verifies are audited.
+- **Resumable uploads** — an offset protocol (in the spirit of tus) over the existing
+  `.part` staging file: HEAD reports how many bytes are already durable, PATCH appends
+  the remaining slice at a validated offset (409 + authoritative offset on mismatch),
+  and the finalizing chunk hashes + renames + writes the sidecar. The browser resumes a
+  dropped upload from the server's confirmed offset with bounded, backing-off retries
+  instead of restarting from zero; a cancelled upload's `.part` is swept on delete. Only
+  the finalize is audited, not the per-chunk chatter.
 
 ## Next
 
@@ -43,8 +50,6 @@ tracks what's done and what's next.
 
 ### Tier 2 — deployment-workflow depth
 
-- [ ] **Resumable uploads** — range/tus-based resume so a dropped 5.7 GB upload
-  doesn't restart from zero.
 - [ ] **Secret-aware config** — domain-join creds live in plaintext on the PV; move
   to k8s Secrets / encryption and mask them in the UI and audit.
 - [ ] **Boot-artifact flow** — fold `Build-WinPE.ps1`'s `boot/` output (boot.wim,

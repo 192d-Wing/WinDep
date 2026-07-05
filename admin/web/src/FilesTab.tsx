@@ -18,6 +18,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Spinner from "@cloudscape-design/components/spinner";
 import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
 import { humanSize, apiPath } from "./util";
+import { resumableUpload } from "./upload";
 
 interface FileInfo {
   name: string;
@@ -41,21 +42,6 @@ const CATEGORIES = [
   { label: "config", value: "config" },
   { label: "boot", value: "boot" },
 ];
-
-// PUT a File with real upload progress (fetch cannot report upload progress; XHR can).
-function putWithProgress(url: string, file: File, onPct: (pct: number) => void): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url);
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onPct(Math.round((e.loaded / e.total) * 100));
-    };
-    xhr.onload = () =>
-      xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`${file.name}: HTTP ${xhr.status}`));
-    xhr.onerror = () => reject(new Error(`${file.name}: network error`));
-    xhr.send(file);
-  });
-}
 
 export default function FilesTab() {
   const [category, setCategory] = useState(CATEGORIES[0]);
@@ -109,8 +95,8 @@ export default function FilesTab() {
     setProgress(Object.fromEntries(upload.map((f) => [f.name, 0])));
     try {
       for (const file of upload) {
-        await putWithProgress(apiPath("files", cat, prefix, file.name), file, (pct) =>
-          setProgress((p) => ({ ...p, [file.name]: pct })),
+        await resumableUpload(apiPath("files", cat, prefix, file.name), file, (uploaded) =>
+          setProgress((p) => ({ ...p, [file.name]: Math.round((uploaded / Math.max(1, file.size)) * 100) })),
         );
       }
       setUpload([]);
@@ -232,7 +218,7 @@ export default function FilesTab() {
               errorIconAriaLabel: "Error",
             }}
             showFileSize
-            constraintText={`Uploads land in ${category.label}${prefix ? " / " + prefix : ""}.`}
+            constraintText={`Uploads land in ${category.label}${prefix ? " / " + prefix : ""}. Interrupted uploads resume where they left off.`}
           />
           {busy &&
             Object.entries(progress).map(([name, pct]) => (

@@ -34,6 +34,7 @@ var categories = map[string]bool{"images": true, "config": true, "boot": true}
 
 const errQuery = "query failed"
 const errNotFile = "not a file"
+const errMkdir = "mkdir failed"
 
 type fileInfo struct {
 	Name     string `json:"name"`
@@ -102,7 +103,7 @@ func resolvePath(dataDir, category, rel string) (string, error) {
 // entryInfo converts a directory entry to a fileInfo, skipping bookkeeping files
 // (integrity sidecars and in-flight upload temps) by returning ok=false.
 func entryInfo(dir string, e os.DirEntry) (fileInfo, bool) {
-	if strings.HasSuffix(e.Name(), sidecarExt) || strings.HasSuffix(e.Name(), ".part") {
+	if strings.HasSuffix(e.Name(), sidecarExt) || strings.HasSuffix(e.Name(), partExt) {
 		return fileInfo{}, false
 	}
 	info, err := e.Info()
@@ -159,25 +160,33 @@ func writeChunk(dst *os.File, b []byte, pending *int64) error {
 	return nil
 }
 
-// copySynced streams src -> dst, fsync-ing every syncEvery bytes to keep dirty page
-// cache bounded regardless of file size.
-func copySynced(dst *os.File, src io.Reader) error {
+// copyCountedSynced streams src -> dst, fsync-ing every syncEvery bytes to keep dirty
+// page cache bounded regardless of file size, and returns the number of bytes written
+// (even on a mid-stream error, so a dropped upload can be resumed from where it landed).
+func copyCountedSynced(dst *os.File, src io.Reader) (int64, error) {
 	buf := make([]byte, 4<<20)
-	var pending int64
+	var pending, total int64
 	for {
 		n, rerr := src.Read(buf)
 		if n > 0 {
 			if err := writeChunk(dst, buf[:n], &pending); err != nil {
-				return err
+				return total, err
 			}
+			total += int64(n)
 		}
 		if rerr == io.EOF {
-			return dst.Sync()
+			return total, dst.Sync()
 		}
 		if rerr != nil {
-			return rerr
+			return total, rerr
 		}
 	}
+}
+
+// copySynced streams src -> dst with bounded dirty cache, discarding the byte count.
+func copySynced(dst *os.File, src io.Reader) error {
+	_, err := copyCountedSynced(dst, src)
+	return err
 }
 
 // sidecarExt names the per-file integrity sidecar (sha256sum -c compatible), written
@@ -185,10 +194,43 @@ func copySynced(dst *os.File, src io.Reader) error {
 // verified client-side) without re-reading the file into the admin.
 const sidecarExt = ".sha256"
 
+// partExt names the in-flight staging temp. A resumable upload appends to it across
+// requests; a completed upload is atomically renamed off it onto the final name.
+const partExt = ".part"
+
+// appendStream appends up to limit bytes from src to the file at path (created if
+// absent), fsync-ing periodically to bound dirty page cache. It returns the bytes
+// actually written so a caller can advance the resume offset even on a partial write.
+func appendStream(path string, src io.Reader, limit int64) (int64, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return 0, err
+	}
+	n, werr := copyCountedSynced(f, io.LimitReader(src, limit))
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return n, werr
+}
+
+// finalizePart hashes the fully-staged temp (one streaming pass — the digest can't be
+// carried across stateless, possibly-resumed chunk requests) and atomically renames it
+// into place, returning the SHA-256 for the sidecar.
+func finalizePart(tmp, dest string) ([]byte, error) {
+	sum, err := hashFileRaw(tmp)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		return nil, err
+	}
+	return sum, nil
+}
+
 // saveStream writes src to a ".part" temp beside dest, then atomically renames it.
 // It returns the SHA-256 of the streamed bytes so the caller can record a sidecar.
 func saveStream(dest string, src io.Reader) (sum []byte, err error) {
-	tmp := dest + ".part"
+	tmp := dest + partExt
 	f, err := os.Create(tmp)
 	if err != nil {
 		return nil, err
@@ -230,19 +272,28 @@ func readSidecar(dest string) string {
 	return ""
 }
 
-// hashFile computes the SHA-256 of an on-disk file, streaming it so a multi-GB WIM
+// hashFileRaw computes the SHA-256 of an on-disk file, streaming it so a multi-GB WIM
 // never lands in memory.
-func hashFile(path string) (string, error) {
+func hashFileRaw(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
+}
+
+// hashFile is hashFileRaw as a lowercase-hex string.
+func hashFile(path string) (string, error) {
+	sum, err := hashFileRaw(path)
+	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return fmt.Sprintf("%x", sum), nil
 }
 
 func handleUpload(dataDir string) fiber.Handler {
@@ -256,7 +307,7 @@ func handleUpload(dataDir string) fiber.Handler {
 			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "mkdir failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errMkdir)
 		}
 		sum, err := saveStream(dest, c.Context().RequestBodyStream())
 		if err != nil {
@@ -270,6 +321,111 @@ func handleUpload(dataDir string) fiber.Handler {
 	}
 }
 
+// Resumable-upload headers (an offset/length protocol in the spirit of tus, kept
+// minimal so it needs no extra dependency and reuses the existing .part staging file).
+const (
+	hdrUploadOffset   = "Upload-Offset"
+	hdrUploadLength   = "Upload-Length"
+	hdrUploadComplete = "Upload-Complete"
+)
+
+// handleUploadOffset answers a HEAD with how many bytes are already durable for a
+// target, so the client can resume from there: the final file's size (Complete=1) if
+// it already exists, else the staged .part size, else 0.
+func handleUploadOffset(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		dest, err := resolvePath(dataDir, c.Params("category"), c.Params("*"))
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(dest); err == nil && !fi.IsDir() {
+			c.Set(hdrUploadOffset, strconv.FormatInt(fi.Size(), 10))
+			c.Set(hdrUploadComplete, "1")
+			return c.SendStatus(fiber.StatusOK)
+		}
+		var off int64
+		if fi, err := os.Stat(dest + partExt); err == nil {
+			off = fi.Size()
+		}
+		c.Set(hdrUploadOffset, strconv.FormatInt(off, 10))
+		c.Set(hdrUploadComplete, "0")
+		return c.SendStatus(fiber.StatusOK)
+	}
+}
+
+// parseResume validates a resumable PATCH's target and Upload-Offset/Upload-Length
+// headers, returning the resolved dest path and the two integers.
+func parseResume(c *fiber.Ctx, dataDir string) (dest string, offset, total int64, err error) {
+	rel := c.Params("*")
+	if rel == "" || strings.HasSuffix(rel, "/") {
+		return "", 0, 0, fiber.NewError(fiber.StatusBadRequest, "missing file name")
+	}
+	if dest, err = resolvePath(dataDir, c.Params("category"), rel); err != nil {
+		return "", 0, 0, err
+	}
+	if total, err = strconv.ParseInt(c.Get(hdrUploadLength), 10, 64); err != nil || total < 0 {
+		return "", 0, 0, fiber.NewError(fiber.StatusBadRequest, "missing or invalid Upload-Length")
+	}
+	if offset, err = strconv.ParseInt(c.Get(hdrUploadOffset), 10, 64); err != nil || offset < 0 {
+		return "", 0, 0, fiber.NewError(fiber.StatusBadRequest, "missing or invalid Upload-Offset")
+	}
+	return dest, offset, total, nil
+}
+
+// handleUploadResume appends a chunk to the .part staging file at a client-declared
+// offset and finalizes once it reaches Upload-Length. The offset must equal the current
+// staged size, or the append would corrupt the file — a mismatch returns 409 with the
+// authoritative offset so the client can re-sync (idempotent, safe to retry). Intermediate
+// chunks return 204 (more expected); the finalizing chunk returns 200 with Complete=1.
+func handleUploadResume(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		dest, offset, total, err := parseResume(c, dataDir)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, errMkdir)
+		}
+		tmp := dest + partExt
+
+		var cur int64
+		if fi, err := os.Stat(tmp); err == nil {
+			cur = fi.Size()
+		}
+		if offset != cur {
+			c.Set(hdrUploadOffset, strconv.FormatInt(cur, 10))
+			return fiber.NewError(fiber.StatusConflict, "offset mismatch")
+		}
+
+		// Cap the append at the remaining length so a client can't overrun the file.
+		n, werr := appendStream(tmp, c.Context().RequestBodyStream(), total-cur)
+		newSize := cur + n
+		c.Set(hdrUploadOffset, strconv.FormatInt(newSize, 10))
+		if werr != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "write failed")
+		}
+		if newSize < total {
+			c.Set(hdrUploadComplete, "0")
+			return c.SendStatus(fiber.StatusNoContent) // more chunks expected
+		}
+		return finishUpload(c, tmp, dest)
+	}
+}
+
+// finishUpload finalizes a fully-staged temp: rename into place, record the checksum
+// sidecar (non-fatal on failure), and answer 200 with Complete=1.
+func finishUpload(c *fiber.Ctx, tmp, dest string) error {
+	sum, err := finalizePart(tmp, dest)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "finalize failed")
+	}
+	if err := writeSidecar(dest, sum); err != nil {
+		slog.Warn("sidecar write failed", "path", dest, "err", err.Error())
+	}
+	c.Set(hdrUploadComplete, "1")
+	return c.SendStatus(fiber.StatusOK)
+}
+
 func handleMkdir(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		rel := c.Params("*")
@@ -281,7 +437,7 @@ func handleMkdir(dataDir string) fiber.Handler {
 			return err
 		}
 		if err := os.MkdirAll(dest, 0o755); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "mkdir failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errMkdir)
 		}
 		return c.SendStatus(fiber.StatusCreated)
 	}
@@ -299,6 +455,12 @@ func handleDelete(dataDir string) fiber.Handler {
 		}
 		if _, err := os.Stat(dest); err != nil {
 			if os.IsNotExist(err) {
+				// No final file — but an interrupted resumable upload may have left a
+				// .part; discarding it lets the client cancel/abort cleanly.
+				if _, perr := os.Stat(dest + partExt); perr == nil {
+					os.Remove(dest + partExt)
+					return c.SendStatus(fiber.StatusNoContent)
+				}
 				return fiber.NewError(fiber.StatusNotFound, "not found")
 			}
 			return fiber.NewError(fiber.StatusInternalServerError, "stat failed")
@@ -307,6 +469,7 @@ func handleDelete(dataDir string) fiber.Handler {
 			return fiber.NewError(fiber.StatusInternalServerError, "delete failed")
 		}
 		os.Remove(dest + sidecarExt) // best-effort; no-op for folders
+		os.Remove(dest + partExt)    // sweep any stale staging temp
 		return c.SendStatus(fiber.StatusNoContent)
 	}
 }
@@ -468,6 +631,12 @@ func auditMW(st *Store) fiber.Handler {
 					status = fe.Code
 				}
 			}
+			// A resumable upload PATCHes many chunks; skip the protocol chatter —
+			// intermediate 204s and 409 offset-resyncs — and record only the finalizing
+			// 200 (or a genuine failure).
+			if c.Method() == fiber.MethodPatch && (status == fiber.StatusNoContent || status == fiber.StatusConflict) {
+				return err
+			}
 			_ = st.addAudit(action, category, p, c.IP(), size, status)
 		}
 		return err
@@ -477,11 +646,15 @@ func auditMW(st *Store) fiber.Handler {
 // classify derives the audit action/target from the matched route. Ingest and
 // review endpoints return "" and are not audited.
 func classify(c *fiber.Ctx) (action, category, p string, size int64) {
+	const filesPrefix = "/api/files/"
 	method, pth := c.Method(), c.Path()
 	switch {
-	case method == fiber.MethodPut && strings.HasPrefix(pth, "/api/files/"):
+	case method == fiber.MethodPut && strings.HasPrefix(pth, filesPrefix):
 		return "upload", c.Params("category"), c.Params("*"), int64(max(0, c.Request().Header.ContentLength()))
-	case method == fiber.MethodDelete && strings.HasPrefix(pth, "/api/files/"):
+	case method == fiber.MethodPatch && strings.HasPrefix(pth, filesPrefix):
+		total, _ := strconv.ParseInt(c.Get(hdrUploadLength), 10, 64)
+		return "upload", c.Params("category"), c.Params("*"), max(0, total)
+	case method == fiber.MethodDelete && strings.HasPrefix(pth, filesPrefix):
 		return "delete", c.Params("category"), c.Params("*"), 0
 	case method == fiber.MethodPost && strings.HasPrefix(pth, "/api/folders/"):
 		return "mkdir", c.Params("category"), c.Params("*"), 0
@@ -535,9 +708,12 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 	api.Post("/ingest/status", handleIngestStatus(st))
 	api.Post("/ingest/log", handleIngestLog(st))
 	// file browser
+	const routeFile = "/files/:category/*"
 	api.Get("/files", handleList(dataDir))
-	api.Put("/files/:category/*", handleUpload(dataDir))
-	api.Delete("/files/:category/*", handleDelete(dataDir))
+	api.Put(routeFile, handleUpload(dataDir))
+	api.Head(routeFile, handleUploadOffset(dataDir))    // resume: query staged offset
+	api.Patch(routeFile, handleUploadResume(dataDir))   // resume: append a chunk
+	api.Delete(routeFile, handleDelete(dataDir))
 	api.Post("/folders/:category/*", handleMkdir(dataDir))
 	api.Get("/download/:category/*", handleDownload(dataDir))
 	api.Get("/wiminfo/:category/*", handleWIMInfo(dataDir))

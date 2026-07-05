@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -317,6 +318,116 @@ func TestVerify(t *testing.T) {
 	r, _ := app.Test(httptest.NewRequest("POST", "/api/verify/config/none.json", nil), -1)
 	if r.StatusCode != 404 {
 		t.Fatalf("verify with no checksum: want 404, got %d", r.StatusCode)
+	}
+}
+
+// patchChunk sends a resumable PATCH with the offset/length headers and returns the
+// response, so tests can assert status + the server's authoritative Upload-Offset.
+func patchChunk(t *testing.T, app *fiber.App, url string, offset, total int, body string) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest("PATCH", url, strings.NewReader(body))
+	req.Header.Set("Upload-Offset", fmt.Sprint(offset))
+	req.Header.Set("Upload-Length", fmt.Sprint(total))
+	r, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", url, err)
+	}
+	return r
+}
+
+// a dropped upload resumes from the server's staged offset instead of restarting.
+func TestResumableUpload(t *testing.T) {
+	data := t.TempDir()
+	app := testApp(t, data)
+	url := "/api/files/images/big.wim"
+	part1, part2 := "the-first-half-of-the-image", "...and-the-second-half!!"
+	full := part1 + part2
+	total := len(full)
+	wantSum := fmt.Sprintf("%x", sha256.Sum256([]byte(full)))
+
+	// HEAD a never-seen target: offset 0, not complete.
+	r, _ := app.Test(httptest.NewRequest("HEAD", url, nil), -1)
+	if r.Header.Get("Upload-Offset") != "0" || r.Header.Get("Upload-Complete") != "0" {
+		t.Fatalf("initial HEAD: offset=%q complete=%q", r.Header.Get("Upload-Offset"), r.Header.Get("Upload-Complete"))
+	}
+
+	// First chunk: staged, not finalized (204), offset advances.
+	r = patchChunk(t, app, url, 0, total, part1)
+	if r.StatusCode != 204 || r.Header.Get("Upload-Offset") != fmt.Sprint(len(part1)) {
+		t.Fatalf("chunk1: status=%d offset=%q", r.StatusCode, r.Header.Get("Upload-Offset"))
+	}
+	if _, err := os.Stat(filepath.Join(data, "images", "big.wim")); !os.IsNotExist(err) {
+		t.Fatal("final file should not exist until finalize")
+	}
+
+	// A stale/duplicate chunk at the wrong offset is rejected with the true offset.
+	r = patchChunk(t, app, url, 0, total, part1)
+	if r.StatusCode != 409 || r.Header.Get("Upload-Offset") != fmt.Sprint(len(part1)) {
+		t.Fatalf("offset mismatch: want 409 + offset %d, got %d + %q", len(part1), r.StatusCode, r.Header.Get("Upload-Offset"))
+	}
+
+	// HEAD mid-upload reports the staged offset so the client can resume.
+	r, _ = app.Test(httptest.NewRequest("HEAD", url, nil), -1)
+	if r.Header.Get("Upload-Offset") != fmt.Sprint(len(part1)) || r.Header.Get("Upload-Complete") != "0" {
+		t.Fatalf("mid HEAD: offset=%q complete=%q", r.Header.Get("Upload-Offset"), r.Header.Get("Upload-Complete"))
+	}
+
+	// Final chunk finalizes: 200, complete, correct bytes + checksum sidecar.
+	r = patchChunk(t, app, url, len(part1), total, part2)
+	if r.StatusCode != 200 || r.Header.Get("Upload-Complete") != "1" {
+		t.Fatalf("chunk2: status=%d complete=%q", r.StatusCode, r.Header.Get("Upload-Complete"))
+	}
+	got, err := os.ReadFile(filepath.Join(data, "images", "big.wim"))
+	if err != nil || string(got) != full {
+		t.Fatalf("assembled file = %q (err %v), want %q", string(got), err, full)
+	}
+	if sc := readSidecar(filepath.Join(data, "images", "big.wim")); sc != wantSum {
+		t.Fatalf("sidecar sha256 = %q, want %q", sc, wantSum)
+	}
+
+	// HEAD a finished upload: full size, complete.
+	r, _ = app.Test(httptest.NewRequest("HEAD", url, nil), -1)
+	if r.Header.Get("Upload-Offset") != fmt.Sprint(total) || r.Header.Get("Upload-Complete") != "1" {
+		t.Fatalf("final HEAD: offset=%q complete=%q", r.Header.Get("Upload-Offset"), r.Header.Get("Upload-Complete"))
+	}
+
+	// The multi-chunk upload is audited exactly once (the finalize), not per chunk.
+	ar, _ := app.Test(httptest.NewRequest("GET", "/api/audit", nil), -1)
+	b, _ := io.ReadAll(ar.Body)
+	var entries []map[string]any
+	_ = json.Unmarshal(b, &entries)
+	uploads := 0
+	for _, e := range entries {
+		if e["action"] == "upload" {
+			uploads++
+			if int(e["size"].(float64)) != total {
+				t.Errorf("audit size = %v, want %d", e["size"], total)
+			}
+		}
+	}
+	if uploads != 1 {
+		t.Fatalf("want exactly 1 upload audit entry (finalize only), got %d", uploads)
+	}
+}
+
+// deleting an interrupted upload discards its .part staging file.
+func TestDeleteAbortsPartial(t *testing.T) {
+	data := t.TempDir()
+	app := testApp(t, data)
+	url := "/api/files/images/aborted.wim"
+
+	if r := patchChunk(t, app, url, 0, 100, "only-a-partial-chunk"); r.StatusCode != 204 {
+		t.Fatalf("partial chunk: %d", r.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(data, "images", "aborted.wim.part")); err != nil {
+		t.Fatalf(".part should exist mid-upload: %v", err)
+	}
+	r, _ := app.Test(httptest.NewRequest("DELETE", url, nil), -1)
+	if r.StatusCode != 204 {
+		t.Fatalf("abort delete: %d", r.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(data, "images", "aborted.wim.part")); !os.IsNotExist(err) {
+		t.Fatal(".part should be gone after abort")
 	}
 }
 
