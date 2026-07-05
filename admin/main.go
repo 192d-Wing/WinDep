@@ -1,6 +1,7 @@
 // Command windep-admin is the read-write admin backend for the WinDep deploy
-// server. It exposes a tiny S3-console-style file API over the PersistentVolume
-// (list / upload / delete) and serves the Cloudscape SPA that drives it.
+// server. It exposes an S3-console-style file API over the PersistentVolume
+// (browse folders, upload, create folder, download, delete) and serves the
+// Cloudscape SPA that drives it.
 //
 // It is the ONLY writer to the deploy PV; the client-facing nginx mounts the same
 // volume read-only. Because this is the RW surface, it is meant to sit behind a
@@ -13,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -20,13 +22,15 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 )
 
-// categories are the only subtrees of the deploy PV the admin UI may touch.
+// categories are the only top-level subtrees of the deploy PV the admin UI may
+// touch. Folders may be nested freely beneath each.
 var categories = map[string]bool{"images": true, "config": true, "boot": true}
 
 type fileInfo struct {
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
 	Modified string `json:"modified"`
+	IsDir    bool   `json:"isDir"`
 }
 
 func getenv(k, def string) string {
@@ -36,73 +40,66 @@ func getenv(k, def string) string {
 	return def
 }
 
-// safeName rejects path traversal: a valid upload/delete name is a single path
-// component (no separators, no "..").
-func safeName(name string) (string, bool) {
-	if name == "" || name == "." || name == ".." {
-		return "", false
-	}
-	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
-		return "", false
-	}
-	if filepath.Base(name) != name {
-		return "", false
-	}
-	return name, true
-}
-
-// resolve maps (category, name) to an absolute path under DATA_DIR, or errors.
-func resolve(dataDir, category, name string) (string, error) {
+// resolvePath maps (category, relative URL path) to an absolute filesystem path
+// under DATA_DIR/<category>, neutralizing any "../" traversal. The returned path is
+// guaranteed to stay within the category root.
+func resolvePath(dataDir, category, rel string) (string, error) {
 	if !categories[category] {
 		return "", fiber.NewError(fiber.StatusBadRequest, "unknown category")
 	}
-	clean, ok := safeName(name)
-	if !ok {
-		return "", fiber.NewError(fiber.StatusBadRequest, "invalid name")
+	// path.Clean on a rooted path can never escape above "/", so ".." is defanged.
+	clean := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(rel, "/")), "/")
+	root := filepath.Join(dataDir, category)
+	full := filepath.Join(root, filepath.FromSlash(clean))
+	if full != root && !strings.HasPrefix(full, root+string(os.PathSeparator)) {
+		return "", fiber.NewError(fiber.StatusBadRequest, "invalid path")
 	}
-	return filepath.Join(dataDir, category, clean), nil
+	return full, nil
 }
 
+// handleList returns the entries (folders first-class, via isDir) at
+// <category>/<prefix>.
 func handleList(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		category := c.Query("category", "images")
-		if !categories[category] {
-			return fiber.NewError(fiber.StatusBadRequest, "unknown category")
+		dir, err := resolvePath(dataDir, category, c.Query("prefix"))
+		if err != nil {
+			return err
 		}
-		dir := filepath.Join(dataDir, category)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return c.JSON([]fileInfo{}) // empty category is not an error
+				return c.JSON([]fileInfo{}) // empty/absent folder is not an error
 			}
 			return fiber.NewError(fiber.StatusInternalServerError, "read failed")
 		}
 		out := make([]fileInfo, 0, len(entries))
 		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
 			info, err := e.Info()
 			if err != nil {
 				continue
 			}
-			out = append(out, fileInfo{
-				Name:     e.Name(),
-				Size:     info.Size(),
-				Modified: info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
-			})
+			fi := fileInfo{Name: e.Name(), IsDir: e.IsDir(), Modified: info.ModTime().UTC().Format("2006-01-02T15:04:05Z")}
+			if !e.IsDir() {
+				fi.Size = info.Size()
+			}
+			out = append(out, fi)
 		}
 		return c.JSON(out)
 	}
 }
 
-// handleUpload streams the raw request body to <DATA_DIR>/<category>/<name>.
-// Streaming (not multipart-in-memory) is what makes multi-GB WIM uploads viable.
-// The write goes to a .part temp then renames, so a failed upload never leaves a
-// truncated image the read-only nginx would serve.
+// handleUpload streams the raw request body to <category>/<path>. Streaming (not
+// multipart-in-memory) is what makes multi-GB WIM uploads viable; the write goes to
+// a .part temp then renames, so a failed upload never leaves a truncated image the
+// read-only nginx would serve.
 func handleUpload(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		dest, err := resolve(dataDir, c.Params("category"), c.Params("name"))
+		rel := c.Params("*")
+		if rel == "" || strings.HasSuffix(rel, "/") {
+			return fiber.NewError(fiber.StatusBadRequest, "missing file name")
+		}
+		dest, err := resolvePath(dataDir, c.Params("category"), rel)
 		if err != nil {
 			return err
 		}
@@ -127,25 +124,67 @@ func handleUpload(dataDir string) fiber.Handler {
 			os.Remove(tmp)
 			return fiber.NewError(fiber.StatusInternalServerError, "commit failed")
 		}
-		slog.Info("uploaded", "category", c.Params("category"), "name", c.Params("name"))
+		slog.Info("uploaded", "category", c.Params("category"), "path", rel)
 		return c.SendStatus(fiber.StatusCreated)
 	}
 }
 
-func handleDelete(dataDir string) fiber.Handler {
+// handleMkdir creates a folder (mkdir -p) at <category>/<path>.
+func handleMkdir(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		dest, err := resolve(dataDir, c.Params("category"), c.Params("name"))
+		rel := c.Params("*")
+		if strings.Trim(rel, "/") == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "missing folder name")
+		}
+		dest, err := resolvePath(dataDir, c.Params("category"), rel)
 		if err != nil {
 			return err
 		}
-		if err := os.Remove(dest); err != nil {
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "mkdir failed")
+		}
+		slog.Info("mkdir", "category", c.Params("category"), "path", rel)
+		return c.SendStatus(fiber.StatusCreated)
+	}
+}
+
+// handleDelete removes a file or a folder (recursively) at <category>/<path>.
+func handleDelete(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		rel := c.Params("*")
+		if strings.Trim(rel, "/") == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "refusing to delete category root")
+		}
+		dest, err := resolvePath(dataDir, c.Params("category"), rel)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(dest); err != nil {
 			if os.IsNotExist(err) {
 				return fiber.NewError(fiber.StatusNotFound, "not found")
 			}
+			return fiber.NewError(fiber.StatusInternalServerError, "stat failed")
+		}
+		if err := os.RemoveAll(dest); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "delete failed")
 		}
-		slog.Info("deleted", "category", c.Params("category"), "name", c.Params("name"))
+		slog.Info("deleted", "category", c.Params("category"), "path", rel)
 		return c.SendStatus(fiber.StatusNoContent)
+	}
+}
+
+// handleDownload streams a file to the browser as an attachment.
+func handleDownload(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		src, err := resolvePath(dataDir, c.Params("category"), c.Params("*"))
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(src)
+		if err != nil || info.IsDir() {
+			return fiber.NewError(fiber.StatusNotFound, "not a file")
+		}
+		return c.Download(src, filepath.Base(src))
 	}
 }
 
@@ -181,8 +220,10 @@ func newApp(dataDir, staticDir string) *fiber.App {
 		slog.Warn("ADMIN_TOKEN not set - /api is unauthenticated; restrict via NetworkPolicy")
 	}
 	api.Get("/files", handleList(dataDir))
-	api.Put("/files/:category/:name", handleUpload(dataDir))
-	api.Delete("/files/:category/:name", handleDelete(dataDir))
+	api.Put("/files/:category/*", handleUpload(dataDir))
+	api.Delete("/files/:category/*", handleDelete(dataDir))
+	api.Post("/folders/:category/*", handleMkdir(dataDir))
+	api.Get("/download/:category/*", handleDownload(dataDir))
 
 	// Static Cloudscape SPA, with index.html fallback for client-side routes.
 	app.Static("/", staticDir, fiber.Static{Index: "index.html"})
