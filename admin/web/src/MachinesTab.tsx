@@ -12,6 +12,7 @@ import Select from "@cloudscape-design/components/select";
 import Toggle from "@cloudscape-design/components/toggle";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import { apiPath } from "./util";
+import { WINDOWS_TIMEZONES } from "./timezones";
 
 // A per-machine config is a sparse override of default.json: any field left blank
 // here is omitted from the saved JSON so it inherits the default.
@@ -54,22 +55,9 @@ const MODES = [
   { label: "Interactive", value: "interactive" },
 ];
 
-// Windows tzutil IDs. value must be the exact ID; label carries a UTC hint.
+// Full Windows tzutil ID list lives in ./timezones (value must be the exact ID).
 const TZ_INHERIT = { label: "— Inherit default.json —", value: "" };
-const TIMEZONES = [
-  { label: "Hawaiian Standard Time (UTC-10)", value: "Hawaiian Standard Time" },
-  { label: "Alaskan Standard Time (UTC-9)", value: "Alaskan Standard Time" },
-  { label: "Pacific Standard Time (UTC-8)", value: "Pacific Standard Time" },
-  { label: "US Mountain Standard Time - Arizona (UTC-7)", value: "US Mountain Standard Time" },
-  { label: "Mountain Standard Time (UTC-7)", value: "Mountain Standard Time" },
-  { label: "Central Standard Time (UTC-6)", value: "Central Standard Time" },
-  { label: "Eastern Standard Time (UTC-5)", value: "Eastern Standard Time" },
-  { label: "Atlantic Standard Time (UTC-4)", value: "Atlantic Standard Time" },
-  { label: "UTC", value: "UTC" },
-  { label: "GMT Standard Time - London (UTC+0)", value: "GMT Standard Time" },
-  { label: "Central European Standard Time (UTC+1)", value: "Central European Standard Time" },
-  { label: "Tokyo Standard Time (UTC+9)", value: "Tokyo Standard Time" },
-];
+const TIMEZONES = WINDOWS_TIMEZONES;
 
 const IMG_INHERIT = { label: "— Inherit default.json —", value: "" };
 type Opt = { label: string; value: string };
