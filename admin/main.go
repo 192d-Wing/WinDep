@@ -89,10 +89,66 @@ func handleList(dataDir string) fiber.Handler {
 	}
 }
 
+// syncEvery bounds how much unflushed (dirty) page cache a large upload may
+// accumulate. Writing multi-GB to the Longhorn NFS backend faster than it flushes
+// piles dirty pages against the container memory cap and OOMKills the pod; periodic
+// fsync forces write-back so the cache stays small and stays reclaimable.
+const syncEvery = 32 << 20 // 32 MiB
+
+// copySynced streams src -> dst, fsync-ing every syncEvery bytes to keep dirty
+// page cache bounded regardless of file size.
+func copySynced(dst *os.File, src io.Reader) error {
+	buf := make([]byte, 4<<20) // 4 MiB read buffer
+	var pending int64
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			if pending += int64(n); pending >= syncEvery {
+				if serr := dst.Sync(); serr != nil {
+					return serr
+				}
+				pending = 0
+			}
+		}
+		if rerr == io.EOF {
+			return dst.Sync()
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
+}
+
+// saveStream writes src to a ".part" temp beside dest (fsync-ing periodically),
+// then atomically renames it into place. On any error the temp is removed, so a
+// failed upload never leaves a truncated image the read-only nginx would serve.
+func saveStream(dest string, src io.Reader) (err error) {
+	tmp := dest + ".part"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(tmp)
+		}
+	}()
+	if err = copySynced(f, src); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
+}
+
 // handleUpload streams the raw request body to <category>/<path>. Streaming (not
-// multipart-in-memory) is what makes multi-GB WIM uploads viable; the write goes to
-// a .part temp then renames, so a failed upload never leaves a truncated image the
-// read-only nginx would serve.
+// multipart-in-memory) plus periodic fsync is what makes multi-GB WIM uploads
+// viable under a memory limit.
 func handleUpload(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		rel := c.Params("*")
@@ -106,23 +162,8 @@ func handleUpload(dataDir string) fiber.Handler {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "mkdir failed")
 		}
-		tmp := dest + ".part"
-		f, err := os.Create(tmp)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "create failed")
-		}
-		if _, err := io.Copy(f, c.Context().RequestBodyStream()); err != nil {
-			f.Close()
-			os.Remove(tmp)
+		if err := saveStream(dest, c.Context().RequestBodyStream()); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "write failed")
-		}
-		if err := f.Close(); err != nil {
-			os.Remove(tmp)
-			return fiber.NewError(fiber.StatusInternalServerError, "close failed")
-		}
-		if err := os.Rename(tmp, dest); err != nil {
-			os.Remove(tmp)
-			return fiber.NewError(fiber.StatusInternalServerError, "commit failed")
 		}
 		slog.Info("uploaded", "category", c.Params("category"), "path", rel)
 		return c.SendStatus(fiber.StatusCreated)
