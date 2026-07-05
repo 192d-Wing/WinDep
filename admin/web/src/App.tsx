@@ -5,6 +5,8 @@ import ContentLayout from "@cloudscape-design/components/content-layout";
 import Header from "@cloudscape-design/components/header";
 import Tabs from "@cloudscape-design/components/tabs";
 import Toggle from "@cloudscape-design/components/toggle";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import FilesTab from "./FilesTab";
 import MachinesTab from "./MachinesTab";
 import FleetTab from "./FleetTab";
@@ -51,17 +53,22 @@ export default function App() {
             </Header>
           }
         >
-          <Tabs
-            activeTabId={activeTab}
-            onChange={(e) => setActiveTab(e.detail.activeTabId)}
-            tabs={[
-              { id: "fleet", label: "Fleet", content: <FleetTab /> },
-              { id: "files", label: "Files", content: <FilesTab /> },
-              { id: "machines", label: "Machines", content: <MachinesTab /> },
-              { id: "logs", label: "Deployment logs", content: <LogsTab /> },
-              { id: "audit", label: "Audit trail", content: <AuditTab /> },
-            ]}
-          />
+          <SpaceBetween size="l">
+            <Tabs
+              activeTabId={activeTab}
+              onChange={(e) => setActiveTab(e.detail.activeTabId)}
+              tabs={[
+                { id: "fleet", label: "Fleet", content: <FleetTab /> },
+                { id: "files", label: "Files", content: <FilesTab /> },
+                { id: "machines", label: "Machines", content: <MachinesTab /> },
+                { id: "logs", label: "Deployment logs", content: <LogsTab /> },
+                { id: "audit", label: "Audit trail", content: <AuditTab /> },
+              ]}
+            />
+            <Box textAlign="center" color="text-status-inactive" fontSize="body-s" padding={{ top: "l" }}>
+              WinDep Deploy — Admin · v{__APP_VERSION__} · 192d Wing
+            </Box>
+          </SpaceBetween>
         </ContentLayout>
       }
     />
