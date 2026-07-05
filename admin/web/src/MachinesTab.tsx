@@ -22,6 +22,7 @@ interface Fields {
   targetDisk: string;
   imageUrl: string;
   confirmWipe: boolean;
+  joinDomain: boolean; // UI-only: gates whether the domain fields are written
   TIMEZONE: string;
   LOCALADMINUSER: string;
   LOCALADMINPASS: string;
@@ -38,6 +39,7 @@ const EMPTY: Fields = {
   targetDisk: "first",
   imageUrl: "",
   confirmWipe: false,
+  joinDomain: false,
   TIMEZONE: "",
   LOCALADMINUSER: "",
   LOCALADMINPASS: "",
@@ -52,6 +54,61 @@ const MODES = [
   { label: "Interactive", value: "interactive" },
 ];
 
+// Windows tzutil IDs. value must be the exact ID; label carries a UTC hint.
+const TZ_INHERIT = { label: "— Inherit default.json —", value: "" };
+const TIMEZONES = [
+  { label: "Hawaiian Standard Time (UTC-10)", value: "Hawaiian Standard Time" },
+  { label: "Alaskan Standard Time (UTC-9)", value: "Alaskan Standard Time" },
+  { label: "Pacific Standard Time (UTC-8)", value: "Pacific Standard Time" },
+  { label: "US Mountain Standard Time - Arizona (UTC-7)", value: "US Mountain Standard Time" },
+  { label: "Mountain Standard Time (UTC-7)", value: "Mountain Standard Time" },
+  { label: "Central Standard Time (UTC-6)", value: "Central Standard Time" },
+  { label: "Eastern Standard Time (UTC-5)", value: "Eastern Standard Time" },
+  { label: "Atlantic Standard Time (UTC-4)", value: "Atlantic Standard Time" },
+  { label: "UTC", value: "UTC" },
+  { label: "GMT Standard Time - London (UTC+0)", value: "GMT Standard Time" },
+  { label: "Central European Standard Time (UTC+1)", value: "Central European Standard Time" },
+  { label: "Tokyo Standard Time (UTC+9)", value: "Tokyo Standard Time" },
+];
+
+const IMG_INHERIT = { label: "— Inherit default.json —", value: "" };
+type Opt = { label: string; value: string };
+
+// listImages recursively walks the images category and returns every .wim's path
+// relative to the category root (e.g. "install.wim", "win11/23h2/install.wim").
+async function listImages(): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(prefix: string, depth: number): Promise<void> {
+    if (depth > 5) return;
+    const r = await fetch(`/api/files?category=images&prefix=${encodeURIComponent(prefix)}`);
+    if (!r.ok) return;
+    const entries: { name: string; isDir: boolean }[] = await r.json();
+    for (const e of entries) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDir) await walk(rel, depth + 1);
+      else if (e.name.toLowerCase().endsWith(".wim")) out.push(rel);
+    }
+  }
+  await walk("", 0);
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+// imageBase derives the public origin images are served from (e.g.
+// "https://deploy.jhics.org") from default.json's imageUrl, so the dropdown can
+// build full URLs. Falls back to the admin's own origin if default.json is unset.
+async function imageBase(): Promise<string> {
+  try {
+    const r = await fetch(apiPath("download", "config", "default.json"));
+    if (r.ok) {
+      const c = await r.json();
+      if (typeof c.imageUrl === "string" && c.imageUrl) return new URL(c.imageUrl).origin;
+    }
+  } catch {
+    /* fall through to window origin */
+  }
+  return globalThis.location.origin;
+}
+
 interface Row {
   serial: string;
   computerName: string;
@@ -62,8 +119,15 @@ const MACHINES_PREFIX = "machines";
 // build the sparse override JSON, omitting empty fields so they inherit default.json.
 function toConfig(f: Fields): Record<string, unknown> {
   const unattend: Record<string, string> = {};
-  for (const k of ["TIMEZONE", "LOCALADMINUSER", "LOCALADMINPASS", "JOINDOMAIN", "DOMAINOU", "DOMAINUSER", "DOMAINPASS"] as const) {
+  for (const k of ["TIMEZONE", "LOCALADMINUSER", "LOCALADMINPASS"] as const) {
     if (f[k].trim()) unattend[k] = f[k].trim();
+  }
+  // Domain fields are only written when the join toggle is on; otherwise they are
+  // omitted entirely (so a machine inherits default.json / stays workgroup-joined).
+  if (f.joinDomain) {
+    for (const k of ["JOINDOMAIN", "DOMAINOU", "DOMAINUSER", "DOMAINPASS"] as const) {
+      if (f[k].trim()) unattend[k] = f[k].trim();
+    }
   }
   const cfg: Record<string, unknown> = {};
   if (f.mode) cfg.mode = f.mode;
@@ -85,6 +149,7 @@ function fromConfig(serial: string, c: Record<string, any>): Fields {
     targetDisk: c.targetDisk ?? "",
     imageUrl: c.imageUrl ?? "",
     confirmWipe: Boolean(c.confirmWipe),
+    joinDomain: Boolean(u.JOINDOMAIN),
     TIMEZONE: u.TIMEZONE ?? "",
     LOCALADMINUSER: u.LOCALADMINUSER ?? "",
     LOCALADMINPASS: u.LOCALADMINPASS ?? "",
@@ -102,6 +167,8 @@ export default function MachinesTab() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Fields | null>(null); // non-null = modal open
   const [isNew, setIsNew] = useState(false);
+  const [imageOpts, setImageOpts] = useState<Opt[]>([]); // loaded images -> full URLs
+  const [imagesLoading, setImagesLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -135,6 +202,22 @@ export default function MachinesTab() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Load the image dropdown once: list every .wim on the server and pair each with
+  // the full URL a machine would fetch it from.
+  useEffect(() => {
+    setImagesLoading(true);
+    void (async () => {
+      try {
+        const [base, imgs] = await Promise.all([imageBase(), listImages()]);
+        setImageOpts(imgs.map((rel) => ({ label: rel, value: `${base}/images/${rel}` })));
+      } catch {
+        setImageOpts([]);
+      } finally {
+        setImagesLoading(false);
+      }
+    })();
+  }, []);
 
   async function openEdit(serial: string) {
     setError(null);
@@ -193,6 +276,20 @@ export default function MachinesTab() {
   }
 
   const set = (patch: Partial<Fields>) => setEditing((e) => (e ? { ...e, ...patch } : e));
+
+  // Build the timezone / image select options, appending a "(custom)" entry when the
+  // saved value isn't one we offer, so an existing config never silently loses it.
+  const tzOptions = [TZ_INHERIT, ...TIMEZONES];
+  if (editing?.TIMEZONE && !TIMEZONES.some((o) => o.value === editing.TIMEZONE)) {
+    tzOptions.push({ label: `${editing.TIMEZONE} (custom)`, value: editing.TIMEZONE });
+  }
+  const tzSelected = tzOptions.find((o) => o.value === (editing?.TIMEZONE ?? "")) ?? TZ_INHERIT;
+
+  const imageOptions = [IMG_INHERIT, ...imageOpts];
+  if (editing?.imageUrl && !imageOpts.some((o) => o.value === editing.imageUrl)) {
+    imageOptions.push({ label: `${editing.imageUrl} (custom)`, value: editing.imageUrl });
+  }
+  const imageSelected = imageOptions.find((o) => o.value === (editing?.imageUrl ?? "")) ?? IMG_INHERIT;
 
   return (
     <SpaceBetween size="l">
@@ -291,8 +388,15 @@ export default function MachinesTab() {
               <FormField label="Target disk" description="first | largest | disk number">
                 <Input value={editing.targetDisk} onChange={(e) => set({ targetDisk: e.detail.value })} placeholder="first" />
               </FormField>
-              <FormField label="Image URL" description="Blank = inherit default.json">
-                <Input value={editing.imageUrl} onChange={(e) => set({ imageUrl: e.detail.value })} placeholder="https://deploy.oopl.dev.mil/images/install.wim" />
+              <FormField label="Image URL" description="A .wim loaded on the server, or inherit default.json">
+                <Select
+                  statusType={imagesLoading ? "loading" : "finished"}
+                  loadingText="Listing images"
+                  empty="No images uploaded"
+                  selectedOption={imageSelected}
+                  onChange={(e) => set({ imageUrl: e.detail.selectedOption.value ?? "" })}
+                  options={imageOptions}
+                />
               </FormField>
               <FormField label="Confirm wipe">
                 <Toggle checked={editing.confirmWipe} onChange={(e) => set({ confirmWipe: e.detail.checked })}>
@@ -304,7 +408,12 @@ export default function MachinesTab() {
             <Header variant="h3">Unattend (blank inherits default)</Header>
             <ColumnLayout columns={2}>
               <FormField label="Timezone">
-                <Input value={editing.TIMEZONE} onChange={(e) => set({ TIMEZONE: e.detail.value })} placeholder="Central Standard Time" />
+                <Select
+                  selectedOption={tzSelected}
+                  onChange={(e) => set({ TIMEZONE: e.detail.selectedOption.value ?? "" })}
+                  options={tzOptions}
+                  filteringType="auto"
+                />
               </FormField>
               <FormField label="Local admin user">
                 <Input value={editing.LOCALADMINUSER} onChange={(e) => set({ LOCALADMINUSER: e.detail.value })} />
@@ -312,19 +421,29 @@ export default function MachinesTab() {
               <FormField label="Local admin password">
                 <Input type="password" value={editing.LOCALADMINPASS} onChange={(e) => set({ LOCALADMINPASS: e.detail.value })} />
               </FormField>
-              <FormField label="Join domain">
-                <Input value={editing.JOINDOMAIN} onChange={(e) => set({ JOINDOMAIN: e.detail.value })} placeholder="oopl.dev.mil" />
-              </FormField>
-              <FormField label="Domain OU">
-                <Input value={editing.DOMAINOU} onChange={(e) => set({ DOMAINOU: e.detail.value })} placeholder="OU=Workstations,DC=oopl,DC=dev,DC=mil" />
-              </FormField>
-              <FormField label="Domain join user">
-                <Input value={editing.DOMAINUSER} onChange={(e) => set({ DOMAINUSER: e.detail.value })} placeholder="svc-domainjoin" />
-              </FormField>
-              <FormField label="Domain join password">
-                <Input type="password" value={editing.DOMAINPASS} onChange={(e) => set({ DOMAINPASS: e.detail.value })} />
-              </FormField>
             </ColumnLayout>
+
+            <FormField label="Domain join" description="Off = workgroup / inherit default.json">
+              <Toggle checked={editing.joinDomain} onChange={(e) => set({ joinDomain: e.detail.checked })}>
+                Join this machine to a domain
+              </Toggle>
+            </FormField>
+            {editing.joinDomain && (
+              <ColumnLayout columns={2}>
+                <FormField label="Join domain">
+                  <Input value={editing.JOINDOMAIN} onChange={(e) => set({ JOINDOMAIN: e.detail.value })} placeholder="oopl.dev.mil" />
+                </FormField>
+                <FormField label="Domain OU">
+                  <Input value={editing.DOMAINOU} onChange={(e) => set({ DOMAINOU: e.detail.value })} placeholder="OU=Workstations,DC=oopl,DC=dev,DC=mil" />
+                </FormField>
+                <FormField label="Domain join user">
+                  <Input value={editing.DOMAINUSER} onChange={(e) => set({ DOMAINUSER: e.detail.value })} placeholder="svc-domainjoin" />
+                </FormField>
+                <FormField label="Domain join password">
+                  <Input type="password" value={editing.DOMAINPASS} onChange={(e) => set({ DOMAINPASS: e.detail.value })} />
+                </FormField>
+              </ColumnLayout>
+            )}
           </SpaceBetween>
         )}
       </Modal>

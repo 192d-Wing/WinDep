@@ -17,6 +17,9 @@ tracks what's done and what's next.
 - **Dark mode** — Cloudscape light/dark toggle, persisted, OS-default.
 - **Per-machine config editor** — Machines tab: validated form for
   `config/machines/<SERIAL>.json` (sparse override of default.json, masked creds).
+  A domain-join toggle shows/hides the AD fields (and omits them when off); timezone
+  is a curated `tzutil` pick-list and image URL is a dropdown of the `.wim`s discovered
+  on the payload PV (URL derived from default.json's origin).
 - **Live fleet dashboard** — Fleet tab: auto-refreshing board of the latest status
   per machine (state, %, model, last-seen) with imaging/succeeded/failed tallies,
   computed from the datastore.
