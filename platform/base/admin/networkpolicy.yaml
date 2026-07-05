@@ -1,6 +1,7 @@
-# Lock the read-write admin surface to the admin subnet only. The client provisioning
-# VLAN reaches the RO nginx VIP, never this one. cidr is injected per-site from
-# vars.adminSubnet; widen/duplicate the ipBlock for multiple admin ranges.
+# Lock the read-write admin surface to the admin subnet(s) only. The client
+# provisioning VLAN reaches the RO nginx VIP, never this one. This base carries a
+# safe default; each site replaces the full ingress from-list via an overlay patch
+# (e.g. overlays/k3s/admin-netpol-patch.yaml) to allow one or more admin ranges.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -15,7 +16,7 @@ spec:
   ingress:
     - from:
         - ipBlock:
-            cidr: 10.0.0.0/24 # injected from vars.adminSubnet
+            cidr: 10.0.0.0/8 # default; overlays patch this to the real admin range(s)
       ports:
         - protocol: TCP
           port: 8443

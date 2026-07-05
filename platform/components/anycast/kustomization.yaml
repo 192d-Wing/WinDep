@@ -34,17 +34,9 @@ replacements:
         fieldPaths:
           - metadata.annotations.[io.cilium/lb-ipam-ips]
 
-  # admin subnet -> windep-admin NetworkPolicy ingress ipBlock
-  - source:
-      kind: Variables
-      name: windep-vars
-      fieldPath: spec.adminSubnet
-    targets:
-      - select:
-          kind: NetworkPolicy
-          name: windep-admin
-        fieldPaths:
-          - spec.ingress.0.from.0.ipBlock.cidr
+  # NOTE: the admin allow-list (NetworkPolicy ingress) is a multi-subnet LIST, so
+  # it's set per-site via an overlay patch (see overlays/k3s/admin-netpol-patch.yaml),
+  # not a single-value replacement here.
 
   # LB pool CIDR -> CiliumLoadBalancerIPPool
   - source:

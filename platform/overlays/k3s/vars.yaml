@@ -26,6 +26,6 @@ spec:
   # via an on-demand NFS share-manager; installed cluster-wide (longhorn-system).
   imagesStorageClass: "longhorn"
   imagesSize: "20Gi"
-  # Admin (read-write) endpoint: its own VIP + the subnet allowed to reach it.
+  # Admin (read-write) endpoint VIP. The allowed source subnets are the multi-CIDR
+  # list in admin-netpol-patch.yaml (10.0.111.0/24 + 10.0.110.0/24).
   adminIP: "10.20.100.11"
-  adminSubnet: "10.20.0.0/24"

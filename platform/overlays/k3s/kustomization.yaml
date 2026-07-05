@@ -11,6 +11,10 @@ resources:
 components:
   - ../../components/anycast
 
+# Site admin allow-list for the RW admin VIP (multi-subnet).
+patches:
+  - path: admin-netpol-patch.yaml
+
 images:
   - name: ghcr.io/192d-wing/windep-api
     newTag: "0.1.1"

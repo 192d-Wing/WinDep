@@ -27,6 +27,6 @@ spec:
   # Deploy web-root PVC (config/, images/*.wim, boot/). Needs a ReadWriteMany class.
   imagesStorageClass: "nfs-client"
   imagesSize: "20Gi"
-  # Admin (read-write) endpoint: its own VIP + the subnet allowed to reach it.
+  # Admin (read-write) endpoint VIP. Allowed source subnets are set per-site via an
+  # overlay patch on the windep-admin NetworkPolicy (see overlays/k3s for the pattern).
   adminIP: "10.0.100.11"
-  adminSubnet: "10.0.0.0/24"

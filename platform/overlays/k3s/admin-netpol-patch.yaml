@@ -1,0 +1,18 @@
+# Site admin allow-list: which source subnets may reach the read-write admin VIP
+# (10.20.100.11). Replaces the base NetworkPolicy's single-CIDR ingress with the
+# full set for this site. spec.ingress is atomic, so this patch replaces it wholesale.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: windep-admin
+  namespace: windep
+spec:
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.0.111.0/24 # node / mgmt subnet
+        - ipBlock:
+            cidr: 10.0.110.0/24 # admin workstations
+      ports:
+        - protocol: TCP
+          port: 8443
