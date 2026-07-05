@@ -6,6 +6,7 @@ import Header from "@cloudscape-design/components/header";
 import Tabs from "@cloudscape-design/components/tabs";
 import Toggle from "@cloudscape-design/components/toggle";
 import FilesTab from "./FilesTab";
+import MachinesTab from "./MachinesTab";
 import LogsTab from "./LogsTab";
 import AuditTab from "./AuditTab";
 
@@ -54,6 +55,7 @@ export default function App() {
             onChange={(e) => setActiveTab(e.detail.activeTabId)}
             tabs={[
               { id: "files", label: "Files", content: <FilesTab /> },
+              { id: "machines", label: "Machines", content: <MachinesTab /> },
               { id: "logs", label: "Deployment logs", content: <LogsTab /> },
               { id: "audit", label: "Audit trail", content: <AuditTab /> },
             ]}
