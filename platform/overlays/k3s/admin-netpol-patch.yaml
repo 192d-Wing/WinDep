@@ -8,11 +8,20 @@ metadata:
   namespace: windep
 spec:
   ingress:
+    # admins reach the UI from these subnets
     - from:
         - ipBlock:
             cidr: 10.0.111.0/24 # node / mgmt subnet
         - ipBlock:
             cidr: 10.0.110.0/24 # admin workstations
+      ports:
+        - protocol: TCP
+          port: 8443
+    # windep-api pods forward deployment telemetry to /api/ingest
+    - from:
+        - podSelector:
+            matchLabels:
+              app: windep-api
       ports:
         - protocol: TCP
           port: 8443

@@ -9,10 +9,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -112,6 +115,38 @@ func handleReadyz(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusServiceUnavailable).SendString("draining")
 }
 
+// forwardIngest best-effort POSTs telemetry to the admin datastore for review. It
+// never blocks or fails the WinPE request: empty URL is a no-op, and the send runs
+// in a goroutine bounded by the client timeout. The in-cluster hop skips TLS verify
+// (the admin serving cert is for the external hostname, not its ClusterIP/DNS).
+var (
+	adminIngestURL = os.Getenv("ADMIN_INGEST_URL")
+	ingestClient   = &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // east-west, network-isolated
+		},
+	}
+)
+
+func forwardIngest(path string, payload any) {
+	if adminIngestURL == "" {
+		return
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	go func() {
+		resp, err := ingestClient.Post(adminIngestURL+path, "application/json", bytes.NewReader(body))
+		if err != nil {
+			slog.Warn("ingest forward failed", "err", err.Error())
+			return
+		}
+		resp.Body.Close()
+	}()
+}
+
 func handleReport(c *fiber.Ctx) error {
 	var r StatusReport
 	if err := json.Unmarshal(c.Body(), &r); err != nil {
@@ -124,6 +159,7 @@ func handleReport(c *fiber.Ctx) error {
 		"serial", r.Serial, "mac", r.Mac, "state", r.State,
 		"percent", r.Percent, "message", r.Message, "model", r.Model)
 	recordMachine(r)
+	forwardIngest("/ingest/status", r)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -137,6 +173,7 @@ func handleLog(c *fiber.Ctx) error {
 			"serial", b.Serial, "mac", b.Mac,
 			"level", ln.Level, "ts", ln.Ts, "message", ln.Message)
 	}
+	forwardIngest("/ingest/log", b)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

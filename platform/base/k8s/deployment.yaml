@@ -45,6 +45,10 @@ spec:
               value: "/tls/tls.crt"
             - name: TLS_KEY
               value: "/tls/tls.key"
+            # Best-effort forward of deployment telemetry to the admin datastore
+            # (logs/audit review). Unset = feature off; failures never affect WinPE.
+            - name: ADMIN_INGEST_URL
+              value: "https://windep-admin.windep.svc.cluster.local:443/api"
           resources:
             requests:
               cpu: 100m

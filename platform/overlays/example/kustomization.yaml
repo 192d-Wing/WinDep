@@ -12,6 +12,6 @@ components:
 # Per-environment container image (registry/tag).
 images:
   - name: ghcr.io/192d-wing/windep-api
-    newTag: "0.1.1"
+    newTag: "0.1.2"
   - name: ghcr.io/192d-wing/windep-admin
-    newTag: "0.1.4"
+    newTag: "0.1.5"

@@ -1,0 +1,18 @@
+# Datastore volume for the admin's SQLite DB (deployment telemetry + audit trail).
+# RWO: only the single-replica admin pod mounts it, so SQLite's single-writer model
+# holds. Longhorn (replicated) rather than local-path so the audit trail survives a
+# node loss. Small — this is metadata, not payloads.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: windep-admin-db
+  namespace: windep
+  labels:
+    app.kubernetes.io/part-of: windep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi

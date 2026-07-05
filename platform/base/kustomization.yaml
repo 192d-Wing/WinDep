@@ -18,11 +18,12 @@ resources:
   - web/deployment.yaml
   - web/service.yaml
   - web/poddisruptionbudget.yaml
-  # admin server (Cloudscape UI + Go API) — the read-write path to the same PV.
-  # Separate VIP, locked to the admin subnet by NetworkPolicy.
+  # admin server (Cloudscape UI + Go API) — the read-write path to the same PV, plus
+  # a SQLite datastore for deployment logs + audit trail. Separate VIP, locked down.
   - admin/deployment.yaml
   - admin/service.yaml
   - admin/networkpolicy.yaml
+  - admin/db-pvc.yaml
   - cilium/lb-ippool.yaml
   - cilium/bgp-advertisement.yaml
   # cilium/l2announcement.yaml is an ALTERNATIVE to bgp-advertisement.yaml (L2, not anycast).

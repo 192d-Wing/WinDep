@@ -52,6 +52,8 @@ spec:
             # makes the runtime collect aggressively as it nears the limit.
             - name: GOMEMLIMIT
               value: "460MiB"
+            - name: DB_PATH
+              value: /data/windep.db # SQLite: deployment telemetry + audit trail
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -74,6 +76,8 @@ spec:
           volumeMounts:
             - name: web-root
               mountPath: /srv/windep # RW: uploads/deletes land here
+            - name: db
+              mountPath: /data # SQLite datastore (RWO)
             - name: tls
               mountPath: /tls
               readOnly: true
@@ -83,6 +87,9 @@ spec:
         - name: web-root
           persistentVolumeClaim:
             claimName: windep-web-root
+        - name: db
+          persistentVolumeClaim:
+            claimName: windep-admin-db
         - name: tls
           secret:
             # Serving cert for admin.deploy.oopl.dev.mil, internal CA.
