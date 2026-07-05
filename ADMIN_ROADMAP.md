@@ -23,6 +23,12 @@ tracks what's done and what's next.
 - **Live fleet dashboard** — Fleet tab: auto-refreshing board of the latest status
   per machine (state, %, model, last-seen) with imaging/succeeded/failed tallies,
   computed from the datastore.
+- **WIM integrity & metadata** — every upload is SHA-256'd in-stream to a
+  `sha256sum -c`-compatible `.sha256` sidecar (hidden from the browser, surfaced per
+  file in the list). A per-file Details modal shows the recorded checksum and, parsed
+  straight from the WIM header/XML (no DISM — the admin container is Linux), the image
+  catalogue: index, name, edition, arch, and build. A "Verify before serve" action
+  re-hashes on disk and flags any drift from the recorded digest; verifies are audited.
 
 ## Next
 
@@ -37,8 +43,6 @@ tracks what's done and what's next.
 
 ### Tier 2 — deployment-workflow depth
 
-- [ ] **WIM integrity & metadata** — SHA-256 on upload, DISM edition/build/index
-  display, verify-before-serve.
 - [ ] **Resumable uploads** — range/tus-based resume so a dropped 5.7 GB upload
   doesn't restart from zero.
 - [ ] **Secret-aware config** — domain-join creds live in plaintext on the PV; move

@@ -11,8 +11,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -31,12 +33,14 @@ import (
 var categories = map[string]bool{"images": true, "config": true, "boot": true}
 
 const errQuery = "query failed"
+const errNotFile = "not a file"
 
 type fileInfo struct {
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
 	Modified string `json:"modified"`
 	IsDir    bool   `json:"isDir"`
+	Sha256   string `json:"sha256,omitempty"` // recorded at upload; from the .sha256 sidecar
 }
 
 // StatusReport / LogBatch mirror the payloads windep-api receives from WinPE and
@@ -95,6 +99,24 @@ func resolvePath(dataDir, category, rel string) (string, error) {
 	return full, nil
 }
 
+// entryInfo converts a directory entry to a fileInfo, skipping bookkeeping files
+// (integrity sidecars and in-flight upload temps) by returning ok=false.
+func entryInfo(dir string, e os.DirEntry) (fileInfo, bool) {
+	if strings.HasSuffix(e.Name(), sidecarExt) || strings.HasSuffix(e.Name(), ".part") {
+		return fileInfo{}, false
+	}
+	info, err := e.Info()
+	if err != nil {
+		return fileInfo{}, false
+	}
+	fi := fileInfo{Name: e.Name(), IsDir: e.IsDir(), Modified: info.ModTime().UTC().Format("2006-01-02T15:04:05Z")}
+	if !e.IsDir() {
+		fi.Size = info.Size()
+		fi.Sha256 = readSidecar(filepath.Join(dir, e.Name()))
+	}
+	return fi, true
+}
+
 func handleList(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		category := c.Query("category", "images")
@@ -111,15 +133,9 @@ func handleList(dataDir string) fiber.Handler {
 		}
 		out := make([]fileInfo, 0, len(entries))
 		for _, e := range entries {
-			info, err := e.Info()
-			if err != nil {
-				continue
+			if fi, ok := entryInfo(dir, e); ok {
+				out = append(out, fi)
 			}
-			fi := fileInfo{Name: e.Name(), IsDir: e.IsDir(), Modified: info.ModTime().UTC().Format("2006-01-02T15:04:05Z")}
-			if !e.IsDir() {
-				fi.Size = info.Size()
-			}
-			out = append(out, fi)
 		}
 		return c.JSON(out)
 	}
@@ -164,26 +180,69 @@ func copySynced(dst *os.File, src io.Reader) error {
 	}
 }
 
+// sidecarExt names the per-file integrity sidecar (sha256sum -c compatible), written
+// beside each uploaded file so integrity survives DB loss and can be re-checked (or
+// verified client-side) without re-reading the file into the admin.
+const sidecarExt = ".sha256"
+
 // saveStream writes src to a ".part" temp beside dest, then atomically renames it.
-func saveStream(dest string, src io.Reader) (err error) {
+// It returns the SHA-256 of the streamed bytes so the caller can record a sidecar.
+func saveStream(dest string, src io.Reader) (sum []byte, err error) {
 	tmp := dest + ".part"
 	f, err := os.Create(tmp)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		if err != nil {
 			os.Remove(tmp)
 		}
 	}()
-	if err = copySynced(f, src); err != nil {
+	h := sha256.New()
+	if err = copySynced(f, io.TeeReader(src, h)); err != nil {
 		f.Close()
-		return err
+		return nil, err
 	}
 	if err = f.Close(); err != nil {
-		return err
+		return nil, err
 	}
-	return os.Rename(tmp, dest)
+	if err = os.Rename(tmp, dest); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
+}
+
+// writeSidecar records dest's digest in a sha256sum-format sidecar next to it.
+func writeSidecar(dest string, sum []byte) error {
+	line := fmt.Sprintf("%x  %s\n", sum, filepath.Base(dest))
+	return os.WriteFile(dest+sidecarExt, []byte(line), 0o644)
+}
+
+// readSidecar returns the recorded hex digest for dest, or "" if there is none.
+func readSidecar(dest string) string {
+	b, err := os.ReadFile(dest + sidecarExt)
+	if err != nil {
+		return ""
+	}
+	if f := strings.Fields(string(b)); len(f) > 0 {
+		return f[0]
+	}
+	return ""
+}
+
+// hashFile computes the SHA-256 of an on-disk file, streaming it so a multi-GB WIM
+// never lands in memory.
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 func handleUpload(dataDir string) fiber.Handler {
@@ -199,8 +258,13 @@ func handleUpload(dataDir string) fiber.Handler {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "mkdir failed")
 		}
-		if err := saveStream(dest, c.Context().RequestBodyStream()); err != nil {
+		sum, err := saveStream(dest, c.Context().RequestBodyStream())
+		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "write failed")
+		}
+		// The file is already durably renamed; a sidecar failure is non-fatal.
+		if err := writeSidecar(dest, sum); err != nil {
+			slog.Warn("sidecar write failed", "path", dest, "err", err.Error())
 		}
 		return c.SendStatus(fiber.StatusCreated)
 	}
@@ -242,6 +306,7 @@ func handleDelete(dataDir string) fiber.Handler {
 		if err := os.RemoveAll(dest); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "delete failed")
 		}
+		os.Remove(dest + sidecarExt) // best-effort; no-op for folders
 		return c.SendStatus(fiber.StatusNoContent)
 	}
 }
@@ -257,7 +322,7 @@ func handleDownload(dataDir string) fiber.Handler {
 		}
 		info, err := os.Stat(src)
 		if err != nil || info.IsDir() {
-			return fiber.NewError(fiber.StatusNotFound, "not a file")
+			return fiber.NewError(fiber.StatusNotFound, errNotFile)
 		}
 		f, err := os.Open(src)
 		if err != nil {
@@ -267,6 +332,51 @@ func handleDownload(dataDir string) fiber.Handler {
 		c.Type("bin")
 		c.Context().Response.SetBodyStream(f, int(info.Size()))
 		return nil
+	}
+}
+
+// handleWIMInfo returns the per-image catalogue embedded in a WIM (index, name,
+// edition, arch, build) plus its recorded checksum, parsed from the file header —
+// no DISM, so it works in the Linux admin container.
+func handleWIMInfo(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		src, err := resolvePath(dataDir, c.Params("category"), c.Params("*"))
+		if err != nil {
+			return err
+		}
+		if info, err := os.Stat(src); err != nil || info.IsDir() {
+			return fiber.NewError(fiber.StatusNotFound, errNotFile)
+		}
+		images, err := wimImages(src)
+		if err != nil {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+		}
+		return c.JSON(fiber.Map{"images": images, "sha256": readSidecar(src)})
+	}
+}
+
+// handleVerify re-hashes a file and compares it to the checksum recorded at upload —
+// the "verify before serve" gate that confirms a WIM on the PV is bit-for-bit what
+// was uploaded before a machine is imaged from it.
+func handleVerify(dataDir string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		src, err := resolvePath(dataDir, c.Params("category"), c.Params("*"))
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(src)
+		if err != nil || info.IsDir() {
+			return fiber.NewError(fiber.StatusNotFound, errNotFile)
+		}
+		expected := readSidecar(src)
+		if expected == "" {
+			return fiber.NewError(fiber.StatusNotFound, "no recorded checksum")
+		}
+		actual, err := hashFile(src)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "hash failed")
+		}
+		return c.JSON(fiber.Map{"ok": actual == expected, "expected": expected, "actual": actual, "size": info.Size()})
 	}
 }
 
@@ -377,6 +487,8 @@ func classify(c *fiber.Ctx) (action, category, p string, size int64) {
 		return "mkdir", c.Params("category"), c.Params("*"), 0
 	case method == fiber.MethodGet && strings.HasPrefix(pth, "/api/download/"):
 		return "download", c.Params("category"), c.Params("*"), int64(max(0, c.Response().Header.ContentLength()))
+	case method == fiber.MethodPost && strings.HasPrefix(pth, "/api/verify/"):
+		return "verify", c.Params("category"), c.Params("*"), 0
 	case method == fiber.MethodGet && pth == "/api/files":
 		return "list", c.Query("category"), c.Query("prefix"), 0
 	}
@@ -428,6 +540,8 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 	api.Delete("/files/:category/*", handleDelete(dataDir))
 	api.Post("/folders/:category/*", handleMkdir(dataDir))
 	api.Get("/download/:category/*", handleDownload(dataDir))
+	api.Get("/wiminfo/:category/*", handleWIMInfo(dataDir))
+	api.Post("/verify/:category/*", handleVerify(dataDir))
 
 	app.Static("/", staticDir, fiber.Static{Index: "index.html"})
 	app.Use(func(c *fiber.Ctx) error {

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -204,6 +207,116 @@ func TestFleet(t *testing.T) {
 	}
 	if byS["AAA"]["state"] != "success" || byS["AAA"]["percent"].(float64) != 100 {
 		t.Fatalf("AAA latest = %v, want success/100", byS["AAA"])
+	}
+}
+
+// buildWIM writes a minimal but structurally-valid WIM to path: the 208-byte header
+// with a valid magic and an rhXmlData resource pointing at an appended UTF-16LE XML
+// blob. Enough for wimImages to exercise the real header/XML parse path.
+func buildWIM(t *testing.T, path, xml string) {
+	t.Helper()
+	u16 := []byte{0xFF, 0xFE} // UTF-16LE BOM
+	for _, r := range xml {
+		u16 = append(u16, byte(r), byte(r>>8))
+	}
+	hdr := make([]byte, wimHeaderLen)
+	copy(hdr, wimMagic)
+	rh := hdr[xmlReshdrOff:]
+	binary.LittleEndian.PutUint64(rh[0:8], uint64(len(u16))) // size, flags=0 (uncompressed)
+	binary.LittleEndian.PutUint64(rh[8:16], wimHeaderLen)    // offset = right after header
+	binary.LittleEndian.PutUint64(rh[16:24], uint64(len(u16)))
+	if err := os.WriteFile(path, append(hdr, u16...), 0o644); err != nil {
+		t.Fatalf("write wim: %v", err)
+	}
+}
+
+func TestWIMImages(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.wim")
+	buildWIM(t, path, `<WIM><IMAGE INDEX="1"><NAME>Windows 11 Pro</NAME>`+
+		`<WINDOWS><ARCH>9</ARCH><EDITIONID>Professional</EDITIONID>`+
+		`<VERSION><MAJOR>10</MAJOR><MINOR>0</MINOR><BUILD>22631</BUILD><SPBUILD>2861</SPBUILD></VERSION>`+
+		`</WINDOWS><TOTALBYTES>1234</TOTALBYTES></IMAGE></WIM>`)
+
+	imgs, err := wimImages(path)
+	if err != nil {
+		t.Fatalf("wimImages: %v", err)
+	}
+	if len(imgs) != 1 {
+		t.Fatalf("want 1 image, got %d: %+v", len(imgs), imgs)
+	}
+	got := imgs[0]
+	want := WIMImage{Index: 1, Name: "Windows 11 Pro", Edition: "Professional", Arch: "x64", Build: "10.0.22631.2861", Size: 1234}
+	if got != want {
+		t.Fatalf("image = %+v, want %+v", got, want)
+	}
+
+	// A non-WIM file is rejected, not parsed as an empty catalogue.
+	notWim := filepath.Join(t.TempDir(), "notes.txt")
+	os.WriteFile(notWim, []byte("hello, not a wim"), 0o644)
+	if _, err := wimImages(notWim); err == nil {
+		t.Fatal("expected error parsing non-WIM file")
+	}
+}
+
+// upload records a SHA-256 sidecar, hidden from the listing but surfaced as fileInfo.Sha256.
+func TestUploadRecordsChecksum(t *testing.T) {
+	data := t.TempDir()
+	app := testApp(t, data)
+	body := "install-image-bytes"
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
+
+	if r, _ := app.Test(httptest.NewRequest("PUT", "/api/files/images/a.wim", strings.NewReader(body)), -1); r.StatusCode != 201 {
+		t.Fatalf("upload: %d", r.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(data, "images", "a.wim.sha256")); err != nil {
+		t.Fatalf("sidecar not written: %v", err)
+	}
+
+	r, _ := app.Test(httptest.NewRequest("GET", "/api/files?category=images", nil), -1)
+	b, _ := io.ReadAll(r.Body)
+	var files []fileInfo
+	if err := json.Unmarshal(b, &files); err != nil {
+		t.Fatalf("list decode: %v", err)
+	}
+	if len(files) != 1 { // the .sha256 sidecar is hidden
+		t.Fatalf("want 1 listed file (sidecar hidden), got %d: %+v", len(files), files)
+	}
+	if files[0].Sha256 != sum {
+		t.Fatalf("sha256 = %q, want %q", files[0].Sha256, sum)
+	}
+}
+
+// verify re-hashes on disk and flags tampering against the recorded checksum.
+func TestVerify(t *testing.T) {
+	data := t.TempDir()
+	app := testApp(t, data)
+	app.Test(httptest.NewRequest("PUT", "/api/files/images/a.wim", strings.NewReader("good-bytes")), -1)
+
+	verify := func() map[string]any {
+		r, _ := app.Test(httptest.NewRequest("POST", "/api/verify/images/a.wim", nil), -1)
+		b, _ := io.ReadAll(r.Body)
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("verify decode (%d): %v", r.StatusCode, err)
+		}
+		return m
+	}
+
+	if m := verify(); m["ok"] != true {
+		t.Fatalf("clean file should verify: %v", m)
+	}
+	// Tamper with the file on disk without updating the sidecar.
+	if err := os.WriteFile(filepath.Join(data, "images", "a.wim"), []byte("EVIL-bytes"), 0o644); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	if m := verify(); m["ok"] != false {
+		t.Fatalf("tampered file should fail verify: %v", m)
+	}
+
+	// No sidecar -> 404 (nothing to verify against).
+	r, _ := app.Test(httptest.NewRequest("POST", "/api/verify/config/none.json", nil), -1)
+	if r.StatusCode != 404 {
+		t.Fatalf("verify with no checksum: want 404, got %d", r.StatusCode)
 	}
 }
 

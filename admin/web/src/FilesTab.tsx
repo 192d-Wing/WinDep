@@ -14,6 +14,9 @@ import Input from "@cloudscape-design/components/input";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import Link from "@cloudscape-design/components/link";
 import Icon from "@cloudscape-design/components/icon";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import Spinner from "@cloudscape-design/components/spinner";
+import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
 import { humanSize, apiPath } from "./util";
 
 interface FileInfo {
@@ -21,6 +24,16 @@ interface FileInfo {
   size: number;
   modified: string;
   isDir: boolean;
+  sha256?: string;
+}
+
+interface WimImage {
+  index: number;
+  name: string;
+  edition: string;
+  arch: string;
+  build: string;
+  size: number;
 }
 
 const CATEGORIES = [
@@ -55,6 +68,13 @@ export default function FilesTab() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
+  const [detail, setDetail] = useState<FileInfo | null>(null);
+  const [wim, setWim] = useState<{ images: WimImage[]; sha256: string } | null>(null);
+  const [wimErr, setWimErr] = useState<string | null>(null);
+  const [wimLoading, setWimLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyRes, setVerifyRes] = useState<{ ok: boolean; expected: string; actual: string } | null>(null);
+  const [verifyErr, setVerifyErr] = useState<string | null>(null);
 
   const cat = category.value;
 
@@ -141,6 +161,41 @@ export default function FilesTab() {
     a.href = apiPath("download", cat, prefix, name);
     a.download = name;
     a.click();
+  }
+
+  async function openDetails(f: FileInfo) {
+    setDetail(f);
+    setWim(null);
+    setWimErr(null);
+    setVerifyRes(null);
+    setVerifyErr(null);
+    setWimLoading(true);
+    try {
+      const r = await fetch(apiPath("wiminfo", cat, prefix, f.name));
+      if (r.ok) setWim(await r.json());
+      else if (r.status === 422) setWimErr("Not a WIM image — no capture catalogue to read.");
+      else setWimErr(`metadata failed (${r.status})`);
+    } catch (e) {
+      setWimErr(String(e));
+    } finally {
+      setWimLoading(false);
+    }
+  }
+
+  async function doVerify() {
+    if (!detail) return;
+    setVerifying(true);
+    setVerifyRes(null);
+    setVerifyErr(null);
+    try {
+      const r = await fetch(apiPath("verify", cat, prefix, detail.name), { method: "POST" });
+      if (!r.ok) throw new Error(`verify failed (${r.status})`);
+      setVerifyRes(await r.json());
+    } catch (e) {
+      setVerifyErr(String(e));
+    } finally {
+      setVerifying(false);
+    }
   }
 
   const segs = prefix.split("/").filter(Boolean);
@@ -255,7 +310,15 @@ export default function FilesTab() {
               f.isDir ? (
                 ""
               ) : (
-                <Button variant="inline-icon" iconName="download" ariaLabel={`Download ${f.name}`} onClick={() => download(f.name)} />
+                <SpaceBetween direction="horizontal" size="xxs">
+                  <Button
+                    variant="inline-icon"
+                    iconName="status-info"
+                    ariaLabel={`Details for ${f.name}`}
+                    onClick={() => void openDetails(f)}
+                  />
+                  <Button variant="inline-icon" iconName="download" ariaLabel={`Download ${f.name}`} onClick={() => download(f.name)} />
+                </SpaceBetween>
               ),
           },
         ]}
@@ -287,6 +350,84 @@ export default function FilesTab() {
         }
       >
         <Input value={newFolder ?? ""} onChange={(e) => setNewFolder(e.detail.value)} placeholder="folder name" autoFocus />
+      </Modal>
+
+      <Modal
+        visible={detail !== null}
+        onDismiss={() => setDetail(null)}
+        size="large"
+        header={detail ? `Details — ${detail.name}` : "Details"}
+        footer={
+          <Box float="right">
+            <Button variant="link" onClick={() => setDetail(null)}>
+              Close
+            </Button>
+          </Box>
+        }
+      >
+        {detail && (
+          <SpaceBetween size="l">
+            <Container header={<Header variant="h3">Integrity</Header>}>
+              <SpaceBetween size="s">
+                {detail.sha256 ? (
+                  <Box>
+                    <Box variant="awsui-key-label">SHA-256 (recorded at upload)</Box>
+                    <CopyToClipboard
+                      variant="inline"
+                      textToCopy={detail.sha256}
+                      copyButtonAriaLabel="Copy SHA-256"
+                      copySuccessText="Copied"
+                      copyErrorText="Copy failed"
+                    />
+                  </Box>
+                ) : (
+                  <Box color="text-status-inactive">No checksum recorded (uploaded before integrity tracking).</Box>
+                )}
+                <SpaceBetween direction="horizontal" size="xs" alignItems="center">
+                  <Button loading={verifying} disabled={!detail.sha256} onClick={doVerify}>
+                    Verify before serve
+                  </Button>
+                  {verifyErr && <StatusIndicator type="error">{verifyErr}</StatusIndicator>}
+                  {verifyRes &&
+                    (verifyRes.ok ? (
+                      <StatusIndicator type="success">Matches recorded checksum</StatusIndicator>
+                    ) : (
+                      <StatusIndicator type="error">Mismatch — on-disk bytes differ from upload</StatusIndicator>
+                    ))}
+                </SpaceBetween>
+                {verifyRes && !verifyRes.ok && (
+                  <Box variant="small" color="text-status-inactive">
+                    expected {verifyRes.expected.slice(0, 16)}… · actual {verifyRes.actual.slice(0, 16)}…
+                  </Box>
+                )}
+              </SpaceBetween>
+            </Container>
+
+            <Container header={<Header variant="h3">WIM images</Header>}>
+              {wimLoading ? (
+                <Box textAlign="center">
+                  <Spinner /> Reading catalogue…
+                </Box>
+              ) : wimErr ? (
+                <Box color="text-status-inactive">{wimErr}</Box>
+              ) : (
+                <Table<WimImage>
+                  items={wim?.images ?? []}
+                  variant="embedded"
+                  columnDefinitions={[
+                    { id: "index", header: "#", cell: (i) => i.index },
+                    { id: "name", header: "Name", isRowHeader: true, cell: (i) => i.name },
+                    { id: "edition", header: "Edition", cell: (i) => i.edition || "—" },
+                    { id: "arch", header: "Arch", cell: (i) => i.arch },
+                    { id: "build", header: "Build", cell: (i) => i.build },
+                    { id: "size", header: "Apparent size", cell: (i) => (i.size ? humanSize(i.size) : "—") },
+                  ]}
+                  empty={<Box color="inherit">No images.</Box>}
+                />
+              )}
+            </Container>
+          </SpaceBetween>
+        )}
       </Modal>
     </SpaceBetween>
   );
