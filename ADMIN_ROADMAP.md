@@ -15,22 +15,22 @@ tracks what's done and what's next.
 - **Audit trail** — every file op (upload/delete/mkdir/download/list) recorded with
   time, action, target, source IP, and HTTP status. Hourly pruning bounds growth.
 - **Dark mode** — Cloudscape light/dark toggle, persisted, OS-default.
+- **Per-machine config editor** — Machines tab: validated form for
+  `config/machines/<SERIAL>.json` (sparse override of default.json, masked creds).
+- **Live fleet dashboard** — Fleet tab: auto-refreshing board of the latest status
+  per machine (state, %, model, last-seen) with imaging/succeeded/failed tallies,
+  computed from the datastore.
 
 ## Next
 
 ### Tier 1 — foundational
 
-- [ ] **Authentication & identity (+ RBAC).** *Biggest gap.* Today the NetworkPolicy
-  is the only control and the audit records a source IP, not a user. Add **CAC/PIV
-  mTLS** (DoD PKI client certs) or **OIDC** (Platform One SSO / Keycloak), then
-  role-based access (view vs. delete vs. edit-config). Turns the audit trail into
-  real per-user attribution.
-- [ ] **Per-machine config editor.** *(in progress)* Validated Cloudscape form to
-  create/edit `config/machines/<SERIAL>.json` (computerName, targetDisk, mode,
-  image, domain-join) instead of hand-uploading raw JSON with plaintext creds.
-- [ ] **Live fleet dashboard.** Real-time board of machines currently imaging
-  (%, state, success/fail), sourced from `windep-api`'s `/api/machines`. The
-  operational single-pane view an imaging tech watches during a rollout.
+- [ ] **Authentication & identity (+ RBAC).** *Biggest gap, now #1.* Today the
+  NetworkPolicy is the only control and the audit records a source IP, not a user.
+  Add **CAC/PIV mTLS** (DoD PKI client certs) or **OIDC** (Platform One SSO /
+  Keycloak), then role-based access (view vs. delete vs. edit-config). Turns the
+  audit trail into real per-user attribution — and puts the config editor's
+  plaintext domain-join creds behind real auth.
 
 ### Tier 2 — deployment-workflow depth
 

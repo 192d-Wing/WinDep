@@ -180,6 +180,33 @@ func TestAuditRecordsFailureStatus(t *testing.T) {
 	}
 }
 
+// fleet returns the latest status per machine.
+func TestFleet(t *testing.T) {
+	app := testApp(t, t.TempDir())
+	// two statuses for the same serial (progress -> success) + one other machine
+	for _, body := range []string{
+		`{"serial":"AAA","state":"progress","percent":40}`,
+		`{"serial":"AAA","state":"success","percent":100}`,
+		`{"serial":"BBB","state":"progress","percent":10}`,
+	} {
+		app.Test(httptest.NewRequest("POST", "/api/ingest/status", strings.NewReader(body)), -1)
+	}
+	r, _ := app.Test(httptest.NewRequest("GET", "/api/fleet", nil), -1)
+	b, _ := io.ReadAll(r.Body)
+	var fleet []map[string]any
+	_ = json.Unmarshal(b, &fleet)
+	if len(fleet) != 2 {
+		t.Fatalf("want 2 machines, got %d: %v", len(fleet), fleet)
+	}
+	byS := map[string]map[string]any{}
+	for _, m := range fleet {
+		byS[m["serial"].(string)] = m
+	}
+	if byS["AAA"]["state"] != "success" || byS["AAA"]["percent"].(float64) != 100 {
+		t.Fatalf("AAA latest = %v, want success/100", byS["AAA"])
+	}
+}
+
 func TestPrune(t *testing.T) {
 	st, err := openStore(filepath.Join(t.TempDir(), "p.db"))
 	if err != nil {

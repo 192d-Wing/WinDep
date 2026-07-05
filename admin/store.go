@@ -123,6 +123,35 @@ func (s *Store) deployEvents(serial string, limit int) ([]map[string]any, error)
 	return out, rows.Err()
 }
 
+// fleet returns the latest status per machine (serial) — the live fleet view.
+// The newest status row per serial is picked by MAX(id) (monotonic insert order),
+// which is robust regardless of clock skew in the ts field.
+func (s *Store) fleet() ([]map[string]any, error) {
+	rows, err := s.db.Query(`
+		SELECT serial, state, percent, message, model, ts FROM deploy_event
+		WHERE kind='status' AND id IN (
+			SELECT MAX(id) FROM deploy_event WHERE kind='status' AND serial IS NOT NULL GROUP BY serial
+		)
+		ORDER BY ts DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var serial, state, message, model, ts sql.NullString
+		var percent sql.NullInt64
+		if err := rows.Scan(&serial, &state, &percent, &message, &model, &ts); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{
+			"serial": serial.String, "state": state.String, "percent": percent.Int64,
+			"message": message.String, "model": model.String, "ts": ts.String,
+		})
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) auditEntries(limit int) ([]map[string]any, error) {
 	rows, err := s.db.Query(
 		`SELECT ts,action,category,path,source,size,status FROM audit ORDER BY id DESC LIMIT ?`, limit)

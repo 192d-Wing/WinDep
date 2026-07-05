@@ -7,6 +7,7 @@ import Tabs from "@cloudscape-design/components/tabs";
 import Toggle from "@cloudscape-design/components/toggle";
 import FilesTab from "./FilesTab";
 import MachinesTab from "./MachinesTab";
+import FleetTab from "./FleetTab";
 import LogsTab from "./LogsTab";
 import AuditTab from "./AuditTab";
 
@@ -22,7 +23,7 @@ function prefersDark(): boolean {
 applyMode(prefersDark() ? Mode.Dark : Mode.Light);
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("files");
+  const [activeTab, setActiveTab] = useState("fleet");
   const [dark, setDark] = useState(prefersDark);
 
   useEffect(() => {
@@ -54,6 +55,7 @@ export default function App() {
             activeTabId={activeTab}
             onChange={(e) => setActiveTab(e.detail.activeTabId)}
             tabs={[
+              { id: "fleet", label: "Fleet", content: <FleetTab /> },
               { id: "files", label: "Files", content: <FilesTab /> },
               { id: "machines", label: "Machines", content: <MachinesTab /> },
               { id: "logs", label: "Deployment logs", content: <LogsTab /> },

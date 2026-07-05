@@ -30,6 +30,8 @@ import (
 // touch. Folders may be nested freely beneath each.
 var categories = map[string]bool{"images": true, "config": true, "boot": true}
 
+const errQuery = "query failed"
+
 type fileInfo struct {
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
@@ -313,7 +315,7 @@ func handleLogs(st *Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		events, err := st.deployEvents(c.Query("serial"), queryInt(c, "limit", 200, 2000))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "query failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errQuery)
 		}
 		return c.JSON(events)
 	}
@@ -323,9 +325,19 @@ func handleAudit(st *Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		entries, err := st.auditEntries(queryInt(c, "limit", 200, 2000))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "query failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errQuery)
 		}
 		return c.JSON(entries)
+	}
+}
+
+func handleFleet(st *Store) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		fleet, err := st.fleet()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, errQuery)
+		}
+		return c.JSON(fleet)
 	}
 }
 
@@ -406,6 +418,7 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 	// review surfaces (UI)
 	api.Get("/logs", handleLogs(st))
 	api.Get("/audit", handleAudit(st))
+	api.Get("/fleet", handleFleet(st))
 	// ingest (from windep-api, best-effort)
 	api.Post("/ingest/status", handleIngestStatus(st))
 	api.Post("/ingest/log", handleIngestLog(st))
