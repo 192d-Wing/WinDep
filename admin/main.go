@@ -173,7 +173,11 @@ func handleDelete(dataDir string) fiber.Handler {
 	}
 }
 
-// handleDownload streams a file to the browser as an attachment.
+// handleDownload streams a file to the browser as an attachment. It uses
+// SetBodyStream with the open *os.File (an io.Closer), which fasthttp closes as
+// soon as the response is sent — unlike c.Download's caching file server, which
+// holds the fd ~10s. On the Longhorn RWX (NFS) volume that lingering fd triggers
+// silly-rename, leaving a .nfsXXXX entry that blocks deleting the parent folder.
 func handleDownload(dataDir string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		src, err := resolvePath(dataDir, c.Params("category"), c.Params("*"))
@@ -184,7 +188,14 @@ func handleDownload(dataDir string) fiber.Handler {
 		if err != nil || info.IsDir() {
 			return fiber.NewError(fiber.StatusNotFound, "not a file")
 		}
-		return c.Download(src, filepath.Base(src))
+		f, err := os.Open(src)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "open failed")
+		}
+		c.Set(fiber.HeaderContentDisposition, `attachment; filename="`+filepath.Base(src)+`"`)
+		c.Type("bin")
+		c.Context().Response.SetBodyStream(f, int(info.Size())) // fasthttp Close()s f after send
+		return nil
 	}
 }
 
