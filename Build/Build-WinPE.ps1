@@ -87,6 +87,14 @@ if (Test-Path $dandi) {
 }
 
 # --- 2. copype -------------------------------------------------------------
+# Self-heal after an aborted run: a boot.wim left mounted here blocks rmdir. Discard it
+# (and sweep any orphaned/corrupt mountpoints) before cleaning the work dir.
+$staleMount = Join-Path $WorkDir 'mount'
+if (Test-Path $staleMount) {
+    Warn "Discarding stale mount from a previous run: $staleMount"
+    try { Dismount-WindowsImage -Path $staleMount -Discard -ErrorAction Stop | Out-Null }
+    catch { & dism.exe /Cleanup-Mountpoints | Out-Null }
+}
 if (Test-Path $WorkDir) { Info "Cleaning $WorkDir"; cmd /c rmdir /s /q "$WorkDir" }
 Info "copype amd64 -> $WorkDir"
 $copypeOut = & cmd /c "`"$copype`" amd64 `"$WorkDir`"" 2>&1
@@ -98,6 +106,7 @@ if (-not (Test-Path $bootWim)) { throw "copype did not produce boot.wim:`n$($cop
 # --- 3. mount + optional components ---------------------------------------
 Info "Mounting boot.wim"
 Mount-WindowsImage -ImagePath $bootWim -Index 1 -Path $mountDir | Out-Null
+$mounted = $true # cleared once committed; the finally discards if still set (i.e. we failed)
 
 # Dependency-ordered. Each entry: base cab (+ its en-us language cab).
 $ocs = 'WinPE-WMI','WinPE-NetFx','WinPE-Scripting','WinPE-PowerShell',
@@ -131,18 +140,21 @@ try {
     # --- 5. startnet ------------------------------------------------------
     Info "Installing startnet.cmd"
     Copy-Item (Join-Path $DeploySrc 'startnet.cmd') (Join-Path $mountDir 'Windows\System32\startnet.cmd') -Force
+
+    # --- 6. unmount (commit) ----------------------------------------------
+    Info "Unmounting (commit)"
+    Dismount-WindowsImage -Path $mountDir -Save | Out-Null
+    $mounted = $false
+    Ok "boot.wim built."
 }
 finally {
-    # --- 6. always unmount (commit on success, discard on failure) --------
-    if ($Error.Count -and $Error[0].Exception -and -not $script:committed) {
-        Warn "Error detected - discarding mount."
+    # Any failure before the commit above leaves $mounted set: discard so a dangling
+    # mount never blocks the next run (rmdir can't delete a mounted image directory).
+    if ($mounted) {
+        Warn "Build failed before commit - discarding mount."
         try { Dismount-WindowsImage -Path $mountDir -Discard | Out-Null } catch {}
     }
 }
-Info "Unmounting (commit)"
-Dismount-WindowsImage -Path $mountDir -Save | Out-Null
-$script:committed = $true
-Ok "boot.wim built."
 
 # --- 7. build ISO ----------------------------------------------------------
 New-Item -ItemType Directory -Path (Split-Path $OutputIso) -Force | Out-Null
