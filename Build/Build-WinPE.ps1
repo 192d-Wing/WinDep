@@ -156,15 +156,26 @@ finally {
     }
 }
 
-# --- 7. build ISO ----------------------------------------------------------
-New-Item -ItemType Directory -Path (Split-Path $OutputIso) -Force | Out-Null
-$efisys = Join-Path $mediaDir 'Boot\efisys.bin'          # UEFI-only (prompts for key press)
-$efisysNoPrompt = Join-Path $mediaDir 'Boot\efisys_noprompt.bin'
-$efi = if (Test-Path $efisysNoPrompt) { $efisysNoPrompt } else { $efisys }
-Info "Building ISO -> $OutputIso"
-& $oscdimg -bootdata:"2#p0,e,b$efi" -u2 -udfver102 -h "$mediaDir" "$OutputIso"
-if ($LASTEXITCODE -ne 0) { throw "oscdimg failed ($LASTEXITCODE)." }
-Ok "ISO: $OutputIso"
+# --- 7. build ISO (UEFI, non-fatal) ---------------------------------------
+# The El Torito UEFI boot image lives in the ADK Oscdimg dir, not the copype media.
+# Prefer the no-prompt variant so PXE/USB boot doesn't wait on "press any key", and copy
+# it into the space-free work dir so oscdimg's -bootdata path needs no embedded quoting.
+# A failed ISO must not block staging the network-boot fileset (the cluster-critical part).
+try {
+    New-Item -ItemType Directory -Path (Split-Path $OutputIso) -Force | Out-Null
+    $oscdimgDir = Split-Path $oscdimg
+    $efiSrc = @('efisys_noprompt.bin','efisys.bin') |
+        ForEach-Object { Join-Path $oscdimgDir $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $efiSrc) { throw "efisys boot image not found under $oscdimgDir." }
+    $efi = Join-Path $WorkDir 'efisys.bin'
+    Copy-Item $efiSrc $efi -Force
+    Info "Building ISO (UEFI) -> $OutputIso"
+    & $oscdimg "-bootdata:1#pEF,e,b$efi" -u2 -udfver102 -h "$mediaDir" "$OutputIso"
+    if ($LASTEXITCODE -ne 0) { throw "oscdimg exit $LASTEXITCODE." }
+    Ok "ISO: $OutputIso"
+} catch {
+    Warn "ISO build skipped/failed ($($_.Exception.Message)). Network-boot fileset is unaffected."
+}
 
 # --- 8. stage the network-boot fileset ------------------------------------
 Info "Staging network-boot fileset -> $StageDir"
