@@ -72,14 +72,28 @@ $oscdimg   = Join-Path $AdkRoot   'Deployment Tools\amd64\Oscdimg\oscdimg.exe'
 foreach ($p in @($copype,$ocPath,$oscdimg)) { if (-not (Test-Path $p)) { throw "ADK component missing: $p" } }
 Ok "ADK: $AdkRoot"
 
+# copype.cmd resolves the WinPE fileset via ADK env vars (WinPERoot / OSCDImgRoot / ...)
+# that the "Deployment and Imaging Tools Environment" prompt sets. Launched from a plain
+# prompt those are absent and copype fails ("processor architecture was not found: amd64").
+# Import them so this script works from any elevated prompt, not only the ADK shortcut.
+$dandi = Join-Path $AdkRoot 'Deployment Tools\DandISetEnv.bat'
+if (Test-Path $dandi) {
+    Info "Importing ADK environment (DandISetEnv.bat)"
+    cmd /c "call `"$dandi`" >nul 2>&1 && set" | ForEach-Object {
+        if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] }
+    }
+} else {
+    $env:WinPERoot = $WinPERoot # minimum copype needs
+}
+
 # --- 2. copype -------------------------------------------------------------
 if (Test-Path $WorkDir) { Info "Cleaning $WorkDir"; cmd /c rmdir /s /q "$WorkDir" }
 Info "copype amd64 -> $WorkDir"
-& cmd /c "`"$copype`" amd64 `"$WorkDir`"" | Out-Null
+$copypeOut = & cmd /c "`"$copype`" amd64 `"$WorkDir`"" 2>&1
 $mediaDir = Join-Path $WorkDir 'media'
 $mountDir = Join-Path $WorkDir 'mount'
 $bootWim  = Join-Path $mediaDir 'sources\boot.wim'
-if (-not (Test-Path $bootWim)) { throw "copype did not produce boot.wim." }
+if (-not (Test-Path $bootWim)) { throw "copype did not produce boot.wim:`n$($copypeOut -join [Environment]::NewLine)" }
 
 # --- 3. mount + optional components ---------------------------------------
 Info "Mounting boot.wim"
