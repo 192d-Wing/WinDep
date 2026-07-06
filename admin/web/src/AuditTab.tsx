@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Table from "@cloudscape-design/components/table";
 import Header from "@cloudscape-design/components/header";
 import Button from "@cloudscape-design/components/button";
@@ -6,7 +6,10 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import Box from "@cloudscape-design/components/box";
 import Badge from "@cloudscape-design/components/badge";
 import Alert from "@cloudscape-design/components/alert";
+import Pagination from "@cloudscape-design/components/pagination";
 import { humanSize } from "./util";
+
+const PAGE_SIZE = 25;
 
 interface AuditEntry {
   ts: string;
@@ -30,6 +33,7 @@ export default function AuditTab() {
   const [items, setItems] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentPageIndex, setCurrentPageIndex] = useState(1);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -38,6 +42,7 @@ export default function AuditTab() {
       const r = await fetch(`/api/audit?limit=1000`);
       if (!r.ok) throw new Error(`audit failed (${r.status})`);
       setItems(await r.json());
+      setCurrentPageIndex(1);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -49,6 +54,12 @@ export default function AuditTab() {
     void refresh();
   }, [refresh]);
 
+  const pagesCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const pageItems = useMemo(
+    () => items.slice((currentPageIndex - 1) * PAGE_SIZE, currentPageIndex * PAGE_SIZE),
+    [items, currentPageIndex],
+  );
+
   return (
     <SpaceBetween size="l">
       {error && (
@@ -57,10 +68,17 @@ export default function AuditTab() {
         </Alert>
       )}
       <Table<AuditEntry>
-        items={items}
+        items={pageItems}
         loading={loading}
         loadingText="Loading audit trail"
         variant="container"
+        pagination={
+          <Pagination
+            currentPageIndex={currentPageIndex}
+            pagesCount={pagesCount}
+            onChange={(e) => setCurrentPageIndex(e.detail.currentPageIndex)}
+          />
+        }
         header={
           <Header
             variant="h2"
