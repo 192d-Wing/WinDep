@@ -58,6 +58,26 @@ spec:
                   name: windep-admin-auth
                   key: token
                   optional: true
+            # /api/ztp/resolve reads the config tree (read-only) and decrypts secret
+            # fields server-side so the key never ships in boot.wim.
+            - name: DATA_DIR
+              value: "/srv/windep"
+            # Same base64 32-byte key the admin encrypts with (same optional Secret).
+            # Unset = resolve returns config as-is (encrypted values unusable → set this
+            # once configs are encrypted). MUST equal the admin's CONFIG_KEY.
+            - name: CONFIG_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: windep-admin-config-key
+                  key: key
+                  optional: true
+            # OPA decision endpoint. The api re-evaluates policy server-side before it
+            # releases credentials (identity is spoofable). Empty = enrollment-only gate;
+            # set to your OPA URL (e.g. https://opa.../v1/data/windep/decision) to enforce.
+            - name: POLICY_URL
+              value: ""
+            - name: POLICY_FAIL_ACTION
+              value: "hold" # unreachable/undefined OPA → refuse (never release creds)
           resources:
             requests:
               cpu: 100m
@@ -90,6 +110,10 @@ spec:
             - name: tls
               mountPath: /tls
               readOnly: true
+            # Read-only view of the payload PV so resolve can read + decrypt configs.
+            - name: web-root
+              mountPath: /srv/windep
+              readOnly: true
       volumes:
         - name: tls
           secret:
@@ -97,3 +121,6 @@ spec:
             #   kubectl -n windep create secret tls windep-api-tls \
             #     --cert=api.crt --key=api.key
             secretName: windep-api-tls
+        - name: web-root
+          persistentVolumeClaim:
+            claimName: windep-web-root # shared RWX payload PV (admin writes, api reads)

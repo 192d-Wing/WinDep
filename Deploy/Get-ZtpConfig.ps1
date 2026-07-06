@@ -44,54 +44,6 @@ function Get-ZtpSettings {
     Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
-function Unprotect-ZtpSecret {
-    <#
-      Decrypts a value the admin encrypted at rest (config secret fields never sit in
-      plaintext on the server PV). Envelope, matching admin/secret.go:
-          "enc:v1:" + base64( iv[16] || ciphertext || hmac[32] )
-          encKey = HMAC-SHA256(master,"enc"),  macKey = HMAC-SHA256(master,"mac")
-          hmac   = HMAC-SHA256(macKey, iv||ciphertext)   (encrypt-then-MAC)
-      AES-256-CBC + HMAC-SHA256 (not AES-GCM) so it runs on WinPE's .NET Framework.
-      A non-envelope value is returned unchanged, so plaintext configs still work.
-    #>
-    param([string]$Value, [byte[]]$MasterKey)
-    if (-not $Value -or -not $Value.StartsWith('enc:v1:')) { return $Value }
-    if (-not $MasterKey) { throw "encrypted config value but no configKey in ztp.config.json" }
-
-    $blob = [Convert]::FromBase64String($Value.Substring('enc:v1:'.Length))
-    if ($blob.Length -lt (16 + 32)) { throw "ciphertext too short" }
-
-    $macLen = 32; $ivLen = 16
-    $iv  = $blob[0..($ivLen-1)]
-    $ct  = $blob[$ivLen..($blob.Length-$macLen-1)]
-    $tag = $blob[($blob.Length-$macLen)..($blob.Length-1)]
-
-    $hmac = New-Object System.Security.Cryptography.HMACSHA256
-    try {
-        $hmac.Key = $MasterKey; $encKey = $hmac.ComputeHash([Text.Encoding]::ASCII.GetBytes('enc'))
-        $hmac.Key = $MasterKey; $macKey = $hmac.ComputeHash([Text.Encoding]::ASCII.GetBytes('mac'))
-        # verify-then-decrypt over iv||ct
-        $macIn = New-Object byte[] ($iv.Length + $ct.Length)
-        [Array]::Copy($iv, 0, $macIn, 0, $iv.Length)
-        [Array]::Copy($ct, 0, $macIn, $iv.Length, $ct.Length)
-        $hmac.Key = $macKey; $calc = $hmac.ComputeHash($macIn)
-        $ok = $calc.Length -eq $tag.Length
-        for ($i = 0; $i -lt $tag.Length; $i++) { if ($calc[$i] -ne $tag[$i]) { $ok = $false } }
-        if (-not $ok) { throw "HMAC mismatch (wrong configKey or tampered value)" }
-    } finally { $hmac.Dispose() }
-
-    $aes = [System.Security.Cryptography.Aes]::Create()
-    try {
-        $aes.KeySize = 256; $aes.Mode = 'CBC'; $aes.Padding = 'PKCS7'
-        $aes.Key = $encKey; $aes.IV = $iv
-        $dec = $aes.CreateDecryptor()
-        try {
-            $plain = $dec.TransformFinalBlock($ct, 0, $ct.Length)
-            return [Text.Encoding]::UTF8.GetString($plain)
-        } finally { $dec.Dispose() }
-    } finally { $aes.Dispose() }
-}
-
 function Invoke-JsonGet {
     param([Parameter(Mandatory)][string]$Uri)
     Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
@@ -103,6 +55,41 @@ function Invoke-JsonGet {
         if (-not $resp.IsSuccessStatusCode) { throw "HTTP $([int]$resp.StatusCode) for $Uri" }
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         return ($body | ConvertFrom-Json)
+    } finally { $client.Dispose() }
+}
+
+function Invoke-ZtpResolve {
+    <#
+      Asks the server to resolve THIS machine's config. The api checks enrollment (a
+      per-machine config exists) and the OPA policy, decrypts secret fields server-side,
+      and returns the merged config. The decryption key never leaves the server.
+      Returns the config object on 200, or $null on 403/404/any error (not authorized /
+      not enrolled) so the caller falls back to interactive.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ApiUrl,
+        [Parameter(Mandatory)][pscustomobject]$Identity,
+        $Inventory
+    )
+    $payload = @{
+        serial    = $Identity.SanitizedSerial
+        mac       = $Identity.Mac
+        model     = $Identity.Model
+        inventory = $Inventory
+    } | ConvertTo-Json -Depth 12 -Compress
+
+    Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(30)
+    try {
+        $content = New-Object System.Net.Http.StringContent($payload, [System.Text.Encoding]::UTF8, 'application/json')
+        $resp = $client.PostAsync("$($ApiUrl.TrimEnd('/'))/api/ztp/resolve", $content).GetAwaiter().GetResult()
+        if (-not $resp.IsSuccessStatusCode) { return $null } # 403 policy / 404 not enrolled
+        $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        return ($body | ConvertFrom-Json)
+    } catch {
+        Write-Warning "Config resolve failed: $($_.Exception.Message)"
+        return $null
     } finally { $client.Dispose() }
 }
 
@@ -122,7 +109,7 @@ function Get-ZtpConfig {
         @{ Mode; DiskRule; ComputerName; ImageUrl; Unattend(hashtable);
            ConfirmWipe; Identity; ServerUrl; Source }
     #>
-    [CmdletBinding()] param([switch]$Quiet)
+    [CmdletBinding()] param([switch]$Quiet, [pscustomobject]$Inventory)
 
     $settings = Get-ZtpSettings
     $server   = ($settings.serverUrl).TrimEnd('/')
@@ -130,14 +117,15 @@ function Get-ZtpConfig {
     $id       = Get-MachineIdentity
     if (-not $Quiet) { Write-Host "Identity: serial=$($id.Serial) mac=$($id.Mac)" }
 
-    # Per-machine first, then default. Server-provided wins over ztp.config.json defaults.
-    # $perMachineFound drives auto mode-selection: a per-machine file == authorized zero-touch.
+    # Ask the server to resolve this machine's config: it gates on enrollment + OPA and
+    # decrypts secret fields server-side, so no decryption key ships in boot.wim. A 403/404
+    # (not authorized / not enrolled) yields $null and we fall back to the static default.
+    # $perMachineFound drives auto mode-selection: a resolved config == authorized zero-touch.
     $cfg = $null; $source = $null; $perMachineFound = $false
-    $perMachineUri = "$server/config/machines/$($id.SanitizedSerial).json"
-    $defaultUri    = "$server/config/default.json"
-    try   { $cfg = Invoke-JsonGet -Uri $perMachineUri; if ($cfg) { $source = $perMachineUri; $perMachineFound = $true } }
-    catch { Write-Warning "Per-machine config fetch failed: $($_.Exception.Message)" }
+    $resolved = Invoke-ZtpResolve -ApiUrl $api -Identity $id -Inventory $Inventory
+    if ($resolved) { $cfg = $resolved; $source = "$api/api/ztp/resolve"; $perMachineFound = $true }
     if (-not $cfg) {
+        $defaultUri = "$server/config/default.json"
         try   { $cfg = Invoke-JsonGet -Uri $defaultUri; if ($cfg) { $source = $defaultUri } }
         catch { Write-Warning "Default config fetch failed: $($_.Exception.Message)" }
     }
@@ -146,20 +134,11 @@ function Get-ZtpConfig {
     function pick($a, $b, $fallback) { if ($null -ne $a) { $a } elseif ($null -ne $b) { $b } else { $fallback } }
     $sd = $settings.defaults
 
-    # configKey (base64, 32 bytes) decrypts secret fields the admin stored encrypted at
-    # rest. Absent/blank = plaintext configs only (pre-encryption clusters keep working).
-    $masterKey = $null
-    if ($settings.PSObject.Properties.Name -contains 'configKey' -and $settings.configKey) {
-        try { $masterKey = [Convert]::FromBase64String($settings.configKey) } catch { Write-Warning "configKey is not valid base64; ignoring" }
-    }
-
+    # Secret fields already arrived decrypted from the resolve endpoint (or are plaintext
+    # in default.json); the client holds no key and does no decryption.
     $unattend = @{}
     if ($cfg -and $cfg.PSObject.Properties.Name -contains 'unattend' -and $cfg.unattend) {
-        foreach ($p in $cfg.unattend.PSObject.Properties) {
-            $v = $p.Value
-            if ($v -is [string] -and $v.StartsWith('enc:v1:')) { $v = Unprotect-ZtpSecret -Value $v -MasterKey $masterKey }
-            $unattend[$p.Name] = $v
-        }
+        foreach ($p in $cfg.unattend.PSObject.Properties) { $unattend[$p.Name] = $p.Value }
     }
 
     $nameTemplate = pick ($cfg.computerName) ($sd.computerName) 'WKS-{SERIAL}'

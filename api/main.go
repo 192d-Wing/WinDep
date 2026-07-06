@@ -255,11 +255,25 @@ func newApp() *fiber.App {
 	api.Post("/log", handleLog)
 	api.Post("/inventory", handleInventory)
 	api.Get("/machines", handleMachines)
+	// Zero-touch config resolution: enrollment + OPA gate, decrypts creds server-side.
+	api.Post("/ztp/resolve", handleResolve(getenv("DATA_DIR", "/srv/windep")))
 	return app
 }
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// /api/ztp/resolve serves decrypted creds only when it can decrypt (CONFIG_KEY) and
+	// gate (POLICY_URL). Surface both so a misconfig is obvious in the logs.
+	if secretsEnabled() {
+		slog.Info("CONFIG_KEY set - /api/ztp/resolve decrypts config secrets server-side")
+	} else {
+		slog.Warn("CONFIG_KEY not set - /api/ztp/resolve serves config as-is (encrypted values unusable)")
+	}
+	if os.Getenv("POLICY_URL") == "" {
+		slog.Warn("POLICY_URL not set - resolve gate is enrollment-only (no OPA allow check)")
+	}
+
 	app := newApp()
 
 	addr := getenv("LISTEN_ADDR", ":8443")

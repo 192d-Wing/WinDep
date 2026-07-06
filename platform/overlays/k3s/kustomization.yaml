@@ -17,6 +17,6 @@ patches:
 
 images:
   - name: ghcr.io/192d-wing/windep-api
-    newTag: "0.1.3"
+    newTag: "0.1.4"
   - name: ghcr.io/192d-wing/windep-admin
-    newTag: "0.1.15"
+    newTag: "0.1.16"

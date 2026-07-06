@@ -272,7 +272,7 @@ function Start-AutoRoute {
     $win.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
 
     $cfg = $null
-    try { $cfg = Get-ZtpConfig -Quiet } catch { $cfg = $null }
+    try { $cfg = Get-ZtpConfig -Quiet -Inventory $inv } catch { $cfg = $null }
     if ($cfg -and $decision.Config) { $cfg = Merge-PolicyConfig -Config $cfg -PolicyConfig $decision.Config }
 
     if ($cfg -and $cfg.HasMachineConfig -and $cfg.Mode -ne 'interactive') {

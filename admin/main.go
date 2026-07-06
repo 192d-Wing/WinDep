@@ -39,6 +39,8 @@ const errMkdir = "mkdir failed"
 const errRead = "read failed"
 const errWrite = "write failed"
 const errNoName = "missing file name"
+const errInvalidJSON = "invalid json"
+const errStore = "store failed"
 const logSidecar = "sidecar write failed"
 
 type fileInfo struct {
@@ -634,10 +636,10 @@ func handleIngestStatus(st *Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		var r StatusReport
 		if err := readJSON(c, &r); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+			return fiber.NewError(fiber.StatusBadRequest, errInvalidJSON)
 		}
 		if err := st.addStatus(r); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "store failed")
+			return fiber.NewError(fiber.StatusInternalServerError, errStore)
 		}
 		return c.SendStatus(fiber.StatusAccepted)
 	}
@@ -647,12 +649,35 @@ func handleIngestLog(st *Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		var b LogBatch
 		if err := readJSON(c, &b); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+			return fiber.NewError(fiber.StatusBadRequest, errInvalidJSON)
 		}
 		for _, l := range b.Lines {
 			if err := st.addLog(b.Serial, b.Mac, l.Level, l.Message, l.Ts); err != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, "store failed")
+				return fiber.NewError(fiber.StatusInternalServerError, errStore)
 			}
+		}
+		return c.SendStatus(fiber.StatusAccepted)
+	}
+}
+
+// handleIngestAudit records an audit event forwarded by windep-api — notably ZTP
+// config resolutions, so credential disclosures to WinPE land in the same trail as
+// file ops, attributed to the real client IP the api saw.
+func handleIngestAudit(st *Store) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var a struct {
+			Action   string `json:"action"`
+			Category string `json:"category"`
+			Path     string `json:"path"`
+			Source   string `json:"source"`
+			Size     int64  `json:"size"`
+			Status   int    `json:"status"`
+		}
+		if err := readJSON(c, &a); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, errInvalidJSON)
+		}
+		if err := st.addAudit(a.Action, a.Category, a.Path, a.Source, a.Size, a.Status); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, errStore)
 		}
 		return c.SendStatus(fiber.StatusAccepted)
 	}
@@ -784,6 +809,7 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 	// ingest (from windep-api, best-effort)
 	api.Post("/ingest/status", handleIngestStatus(st))
 	api.Post("/ingest/log", handleIngestLog(st))
+	api.Post("/ingest/audit", handleIngestAudit(st))
 	// file browser
 	const routeFile = "/files/:category/*"
 	api.Get("/files", handleList(dataDir))

@@ -37,14 +37,20 @@ tracks what's done and what's next.
   instead of restarting from zero; a cancelled upload's `.part` is swept on delete. Only
   the finalize is audited, not the per-chunk chatter.
 - **Secret-aware config** — domain-join creds are encrypted at rest on the PV, never
-  plaintext. The admin encrypts secret `unattend` fields (`*PASS`) with `CONFIG_KEY`
-  (a k8s Secret) into an `enc:v1:` envelope — **AES-256-CBC + HMAC-SHA256**, not AES-GCM,
-  so it interoperates with WinPE's .NET-Framework runtime. The `/api/config` editor path
-  masks creds to a `__KEEP__` sentinel on read (the browser never receives a value) and,
-  on write, keeps the stored value on `__KEEP__`, clears on blank, or encrypts fresh
-  input. WinPE decrypts at deploy time via `Unprotect-ZtpSecret` using the same key baked
-  into `boot.wim` (`Build-WinPE.ps1 -ConfigKey`); plaintext configs still work, so rollout
-  is staged. Config writes are audited (path only, never content).
+  plaintext, and **the decryption key never leaves the server**. The admin encrypts secret
+  `unattend` fields (`*PASS`) with `CONFIG_KEY` (a k8s Secret) into an `enc:v1:` envelope —
+  **AES-256-CBC + HMAC-SHA256** (encrypt-then-MAC). The `/api/config` editor path masks
+  creds to a `__KEEP__` sentinel on read (the browser never receives a value) and, on
+  write, keeps the stored value on `__KEEP__`, clears on blank, or encrypts fresh input;
+  config writes are audited (path only, never content).
+  - **Server-side resolution** (supersedes an earlier client-key idea, which would have
+    put the master key in `boot.wim`): WinPE POSTs its identity + inventory to
+    `windep-api` `POST /api/ztp/resolve`, which gates on **enrollment** (an admin
+    provisioned `machines/<serial>.json`) **and** a server-side **OPA `allow`**
+    (`POLICY_URL`, fail-closed), then decrypts server-side and returns the merged config.
+    Identity is the lookup key + audit subject, never the gate. Every resolution (served or
+    refused) is forwarded to the admin audit trail with the real client IP. The WinPE
+    client holds no key and does no crypto.
 
 ## Next
 
