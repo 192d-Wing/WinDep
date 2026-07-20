@@ -1,0 +1,26 @@
+{{- if eq .Values.tls.mode "caddyAcme" }}
+# Caddyfile for the admin sidecar (tls.mode=caddyAcme). Terminates public TLS via ACME
+# TLS-ALPN-01 on the admin VIP and reverse-proxies to the admin container on localhost.
+# Single replica ⇒ certmagic storage is local (admin-db PVC subdir), no shared store needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: windep-admin-caddy
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "admin") | nindent 4 }}
+data:
+  Caddyfile: |
+    {
+      email {{ .Values.caddyAcme.email }}
+      acme_ca {{ .Values.caddyAcme.server }}
+      acme_ca_root /etc/caddy/ca/ca.crt
+      storage file_system /data/caddy
+      https_port 8443
+      admin off
+    }
+
+    {{ join ", " .Values.caddyAcme.hosts.admin }} {
+      reverse_proxy localhost:8080
+    }
+{{- end }}

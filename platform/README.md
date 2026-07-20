@@ -89,6 +89,43 @@ Check issuance: `kubectl -n windep get issuer,certificate,certificaterequest,ord
 
 ---
 
+## TLS modes (`tls.mode`)
+
+The chart offers two ways to get the public-facing certs; pick with `tls.mode`:
+
+- **`certManager`** (default) — cert-manager issues certs (above); the Go apps + nginx serve
+  their own TLS. DNS-01/HTTP-01 only.
+- **`caddyAcme`** — **Caddy is the edge**: `windep-web` runs Caddy (instead of nginx) and the
+  admin pod gets a **Caddy sidecar**. Caddy obtains public certs via **ACME TLS-ALPN-01**
+  (`certmagic`, HA across the deploy replicas via a shared RWX PVC) against `caddyAcme.server`,
+  and reverse-proxies to the Go apps. Use this when you want TLS-ALPN-01 without DNS creds or an
+  Ingress. cert-manager is not rendered in this mode.
+
+```yaml
+tls:
+  mode: caddyAcme
+caddyAcme:
+  server: "https://ca.jhics.org/acme/acme/directory"   # internal ACME CA (step-ca)
+  email: "pki@jhics.org"
+  caRootSecret: windep-internal-ca                       # kubectl create secret generic ... --from-file=ca.crt
+  storage: { storageClass: longhorn, size: 1Gi }         # RWX; certmagic shared store
+  hosts:
+    web:   ["deploy.jhics.org", "windep-api.jhics.org"]
+    admin: ["admin.deploy.jhics.org"]
+```
+
+Prereqs for `caddyAcme`: a **Caddy image** (`images.caddy`; prefer Iron Bank — verify Repo One),
+the internal-CA-root secret (`caRootSecret`, key `ca.crt`) that Caddy trusts when reaching the
+ACME directory, and an **RWX** StorageClass for the shared certmagic PVC. The certmagic
+distributed TLS-ALPN-01 behavior (challenge served from shared storage on whichever anycast
+replica the ACME server hits) should be validated on a multi-replica cluster.
+
+> **Scope note:** in `caddyAcme` today the Caddy→backend hop is **plaintext** on the pod
+> network. Backend **mTLS** (edge→api/admin and api→admin) is a follow-up change (app-level mTLS
+> in the Go services); see the roadmap.
+
+---
+
 ## k3s
 
 k3s bundles **Klipper ServiceLB** and **flannel**, which both fight Cilium's LoadBalancer IPAM +

@@ -28,9 +28,17 @@ images:
     pullPolicy: IfNotPresent
   nginx:
     # Iron Bank hardened nginx (registry1.dso.mil / Repo One — needs the pull secret
-    # below). Pin/verify the tag for your ATO.
+    # below). Pin/verify the tag for your ATO. Used by the deploy server in
+    # tls.mode=certManager.
     repo: registry1.dso.mil/ironbank/opensource/nginx/nginx
     tag: "1.30.3"
+    pullPolicy: IfNotPresent
+  caddy:
+    # Edge TLS terminator for tls.mode=caddyAcme (ACME TLS-ALPN-01 via certmagic).
+    # Prefer an Iron Bank Caddy for ATO parity — VERIFY availability in Repo One and
+    # pin the tag. Falls back to the public image if your policy allows it.
+    repo: registry1.dso.mil/ironbank/opensource/caddy/caddy
+    tag: "2.8.4"
     pullPolicy: IfNotPresent
 
 # imagePullSecrets applied to the web (Iron Bank nginx) pods. Create it with your
@@ -118,6 +126,42 @@ networking:
   mode: bgp
   lbPoolCIDR: "10.0.100.0/24"        # CiliumLoadBalancerIPPool block the VIPs draw from
   advertiseGroup: "windep-anycast"   # label the cluster's BGP peer configs export (bgp mode)
+
+# ---- TLS mode ---------------------------------------------------------------
+# How the public-facing endpoints get their (internal-CA) serving certs:
+#
+#   certManager  — cert-manager issues certs into secrets.{apiTls,webTls,adminTls},
+#                  which the Go apps + nginx mount directly (DNS-01/HTTP-01; see below).
+#                  This is the default and matches the original chart.
+#
+#   caddyAcme    — Caddy is the edge: windep-web runs Caddy (replaces nginx) and the
+#                  admin pod gets a Caddy sidecar. Caddy obtains public certs via ACME
+#                  TLS-ALPN-01 (certmagic, HA via shared storage) against caddyAcme.server,
+#                  and reverse-proxies to the Go apps, which run PLAINTEXT behind it. Use
+#                  this when you want automatic TLS-ALPN-01 without DNS creds or an Ingress.
+#                  NOTE: the Caddy→backend hop is plaintext on the pod network in this mode;
+#                  backend mTLS is a separate change (see the roadmap / follow-up PR).
+tls:
+  mode: certManager                    # certManager | caddyAcme
+
+# ---- caddyAcme (edge) settings (used when tls.mode=caddyAcme) ----------------
+caddyAcme:
+  # Internal ACME directory (step-ca / smallstep). MUST be the internal CA whose root is
+  # baked into boot.wim — a public Let's Encrypt cert would fail WinPE validation.
+  server: "https://ca.internal.example/acme/acme/directory"
+  email: "pki@example.internal"
+  # Secret holding the internal CA root Caddy trusts when talking to the ACME directory
+  # (and, later, backends). Key: ca.crt.  kubectl create secret generic windep-internal-ca --from-file=ca.crt
+  caRootSecret: windep-internal-ca
+  # certmagic shared storage for HA across the multi-replica deploy edge. Must be RWX and
+  # separate from the payload PV (never web-served).
+  storage:
+    storageClass: "nfs-client"
+    size: "1Gi"
+  # Public hostnames Caddy serves a cert for (SNI). Match what WinPE / admins resolve.
+  hosts:
+    web:   ["deploy.example.internal", "windep-api.example.internal"]
+    admin: ["admin.deploy.example.internal"]
 
 # ---- cert-manager ACME TLS --------------------------------------------------
 # When enabled the chart renders a namespaced ACME Issuer + a Certificate per service,

@@ -43,10 +43,14 @@ spec:
           env:
             - name: LISTEN_ADDR
               value: ":8443"
+            {{- if ne .Values.tls.mode "caddyAcme" }}
+            # certManager mode: api terminates its own TLS. In caddyAcme mode api runs
+            # PLAINTEXT behind the Caddy edge (which reverse-proxies /api here).
             - name: TLS_CERT
               value: "/tls/tls.crt"
             - name: TLS_KEY
               value: "/tls/tls.key"
+            {{- end }}
             # Best-effort forward of deployment telemetry to the admin datastore
             # (logs/audit review). Unset = feature off; failures never affect WinPE.
             - name: ADMIN_INGEST_URL
@@ -96,18 +100,22 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
+            {{- if ne .Values.tls.mode "caddyAcme" }}
             - name: tls
               mountPath: /tls
               readOnly: true
+            {{- end }}
             # Read-only view of the payload PV so resolve can read + decrypt configs.
             - name: web-root
               mountPath: /srv/windep
               readOnly: true
       volumes:
+        {{- if ne .Values.tls.mode "caddyAcme" }}
         - name: tls
           secret:
             # TLS cert chaining to the internal CA that WinPE trusts.
             secretName: {{ .Values.secrets.apiTls }}
+        {{- end }}
         - name: web-root
           persistentVolumeClaim:
             claimName: windep-web-root # shared RWX payload PV (admin writes, api reads)

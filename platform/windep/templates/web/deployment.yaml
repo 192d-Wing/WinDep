@@ -1,6 +1,8 @@
+{{- if eq .Values.tls.mode "certManager" }}
 # WinDep deploy web server — Iron Bank nginx serving the payload tree from the PV and
 # reverse-proxying /api/* to windep-api. Multi-replica across nodes so the shared anycast
-# VIP is HA; all replicas mount the same RWX PVC.
+# VIP is HA; all replicas mount the same RWX PVC. (tls.mode=certManager; the caddyAcme
+# edge is in web/deployment-caddy.yaml.)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -76,3 +78,4 @@ spec:
             secretName: {{ .Values.secrets.webTls }}
         - name: tmp
           emptyDir: {}
+{{- end }}

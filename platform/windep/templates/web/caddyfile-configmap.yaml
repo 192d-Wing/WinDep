@@ -1,0 +1,41 @@
+{{- if eq .Values.tls.mode "caddyAcme" }}
+# Caddyfile for the WinDep deploy edge (tls.mode=caddyAcme).
+#
+# Caddy terminates public TLS via ACME TLS-ALPN-01 against the internal ACME CA
+# (certmagic; storage on the shared RWX PVC for HA across replicas), serves the static
+# payload tree from the PV, and reverse-proxies /api/* to windep-api over plaintext.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: windep-web-caddy
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+data:
+  Caddyfile: |
+    {
+      email {{ .Values.caddyAcme.email }}
+      acme_ca {{ .Values.caddyAcme.server }}
+      # Trust the internal CA when talking to the ACME directory over HTTPS.
+      acme_ca_root /etc/caddy/ca/ca.crt
+      # HA cert/challenge share across replicas (RWX PVC mounted at /data).
+      storage file_system /data/caddy
+      # Listen on 8443 (Service maps 443 -> 8443); the ACME server reaches VIP:443.
+      https_port 8443
+      admin off
+    }
+
+    {{ join ", " .Values.caddyAcme.hosts.web }} {
+      root * /srv/windep
+      @api path /api/*
+      handle @api {
+        # windep-api runs PLAINTEXT in caddyAcme mode (Service 443 -> targetPort 8443).
+        reverse_proxy windep-api.{{ include "windep.namespace" . }}.svc.cluster.local:443
+      }
+      handle {
+        # Static payload: config JSON, WIMs (large; stream), boot files. Caddy defaults
+        # unknown extensions (.wim) to application/octet-stream, like the old nginx types{}.
+        file_server
+      }
+    }
+{{- end }}

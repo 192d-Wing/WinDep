@@ -1,6 +1,11 @@
 # WinDep admin — the ONLY read-write path to the deploy PV (Cloudscape UI + file API).
-# Single replica: it's the sole writer, low-traffic, admin-only. The client nginx mounts
-# the same PVC read-only; this one mounts it RW.
+# Single replica: it's the sole writer, low-traffic, admin-only. The client edge mounts the
+# same PVC read-only; this one mounts it RW.
+#
+# tls.mode=certManager: admin serves HTTPS on :8443 with a mounted cert.
+# tls.mode=caddyAcme:   admin serves PLAINTEXT on :8080; a Caddy sidecar terminates public
+#                       TLS (ACME TLS-ALPN-01) on :8443 and proxies to it on localhost.
+{{- $caddy := eq .Values.tls.mode "caddyAcme" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +24,10 @@ spec:
     metadata:
       labels:
         {{- include "windep.selectorLabels" (dict "ctx" $ "component" "admin") | nindent 8 }}
+      {{- if $caddy }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/admin/caddyfile-configmap.yaml") . | sha256sum }}
+      {{- end }}
     spec:
       automountServiceAccountToken: false # never calls the k8s API
       securityContext:
@@ -32,15 +41,26 @@ spec:
           image: "{{ .Values.images.admin.repo }}:{{ .Values.images.admin.tag }}"
           imagePullPolicy: {{ .Values.images.admin.pullPolicy }}
           ports:
+            {{- if $caddy }}
+            - name: http
+              containerPort: 8080
+            {{- else }}
             - name: https
               containerPort: 8443
+            {{- end }}
           env:
             - name: DATA_DIR
               value: /srv/windep
+            {{- if $caddy }}
+            # Plaintext behind the Caddy sidecar.
+            - name: LISTEN_ADDR
+              value: ":8080"
+            {{- else }}
             - name: TLS_CERT
               value: /tls/tls.crt
             - name: TLS_KEY
               value: /tls/tls.key
+            {{- end }}
             # Optional bearer token; NetworkPolicy is the primary control.
             - name: ADMIN_TOKEN
               valueFrom:
@@ -67,6 +87,16 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          {{- if $caddy }}
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080, scheme: HTTP }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080, scheme: HTTP }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          {{- else }}
           livenessProbe:
             httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
             initialDelaySeconds: 5
@@ -75,6 +105,7 @@ spec:
             httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
             initialDelaySeconds: 3
             periodSeconds: 10
+          {{- end }}
           resources:
             {{- toYaml .Values.admin.resources | nindent 12 }}
           volumeMounts:
@@ -82,11 +113,58 @@ spec:
               mountPath: /srv/windep # RW: uploads/deletes land here
             - name: db
               mountPath: /data # SQLite datastore (RWO)
+            {{- if not $caddy }}
             - name: tls
               mountPath: /tls
               readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
+        {{- if $caddy }}
+        - name: caddy
+          image: "{{ .Values.images.caddy.repo }}:{{ .Values.images.caddy.tag }}"
+          imagePullPolicy: {{ .Values.images.caddy.pullPolicy }}
+          args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: XDG_DATA_HOME
+              value: /data
+            - name: XDG_CONFIG_HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            tcpSocket: { port: 8443 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket: { port: 8443 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits:   { cpu: 250m, memory: 128Mi }
+          volumeMounts:
+            - name: caddyfile
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+              readOnly: true
+            - name: ca-root
+              mountPath: /etc/caddy/ca
+              readOnly: true
+            # Persist certmagic storage in the admin DB PVC (own subdir) — single replica,
+            # so no shared storage needed; this just survives restarts (avoids re-issue).
+            - name: db
+              mountPath: /data/caddy
+              subPath: caddy
+            - name: caddy-tmp
+              mountPath: /tmp
+        {{- end }}
       volumes:
         - name: web-root
           persistentVolumeClaim:
@@ -94,9 +172,20 @@ spec:
         - name: db
           persistentVolumeClaim:
             claimName: windep-admin-db
+        {{- if $caddy }}
+        - name: caddyfile
+          configMap:
+            name: windep-admin-caddy
+        - name: ca-root
+          secret:
+            secretName: {{ .Values.caddyAcme.caRootSecret }}
+        - name: caddy-tmp
+          emptyDir: {}
+        {{- else }}
         - name: tls
           secret:
             # Serving cert for the admin VIP, internal CA.
             secretName: {{ .Values.secrets.adminTls }}
+        {{- end }}
         - name: tmp
           emptyDir: {}
