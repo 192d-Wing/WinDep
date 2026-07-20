@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: windep-api
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
+spec:
+  {{- if not .Values.api.hpa.enabled }}
+  replicas: {{ .Values.api.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "windep.selectorLabels" (dict "ctx" $ "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "windep.selectorLabels" (dict "ctx" $ "component" "api") | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8443"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false # never calls the k8s API
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "windep.selectorLabels" (dict "ctx" $ "component" "api") | nindent 14 }}
+      containers:
+        - name: api
+          image: "{{ .Values.images.api.repo }}:{{ .Values.images.api.tag }}"
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: LISTEN_ADDR
+              value: ":8443"
+            - name: TLS_CERT
+              value: "/tls/tls.crt"
+            - name: TLS_KEY
+              value: "/tls/tls.key"
+            # Best-effort forward of deployment telemetry to the admin datastore
+            # (logs/audit review). Unset = feature off; failures never affect WinPE.
+            - name: ADMIN_INGEST_URL
+              value: {{ .Values.api.adminIngestUrl | quote }}
+            # Must match the admin's ADMIN_TOKEN when set, or ingest gets 401.
+            - name: ADMIN_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.adminAuth }}
+                  key: token
+                  optional: true
+            # /api/ztp/resolve reads the config tree (read-only) and decrypts secret
+            # fields server-side so the key never ships in boot.wim.
+            - name: DATA_DIR
+              value: "/srv/windep"
+            # Same base64 32-byte key the admin encrypts with. MUST equal the admin's CONFIG_KEY.
+            - name: CONFIG_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.configKey }}
+                  key: key
+                  optional: true
+            # OPA decision endpoint; empty = enrollment-only gate.
+            - name: POLICY_URL
+              value: {{ .Values.api.policyUrl | quote }}
+            - name: POLICY_FAIL_ACTION
+              value: {{ .Values.api.policyFailAction | quote }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            # Read-only view of the payload PV so resolve can read + decrypt configs.
+            - name: web-root
+              mountPath: /srv/windep
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            # TLS cert chaining to the internal CA that WinPE trusts.
+            secretName: {{ .Values.secrets.apiTls }}
+        - name: web-root
+          persistentVolumeClaim:
+            claimName: windep-web-root # shared RWX payload PV (admin writes, api reads)

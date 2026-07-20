@@ -1,0 +1,63 @@
+# =============================================================================
+# k3s site values (mirrors the former platform/overlays/k3s).
+#
+#   helm install windep platform/windep -n windep --create-namespace \
+#     -f platform/windep/values-k3s.yaml
+#
+# IMPORTANT (k3s): disable Klipper ServiceLB + flannel + kube-proxy and install Cilium
+# with LB IPAM + BGP (and l2announcements if networking.mode=l2). See platform/README.md.
+# BGP PEERING is cluster-owned — this only names the advertise group to opt the VIPs in.
+# =============================================================================
+
+images:
+  admin:
+    tag: "0.1.17"
+  # api tag inherits the chart default (0.1.4)
+
+web:
+  vip: "10.20.100.10"
+
+admin:
+  vip: "10.20.100.11"
+  # Site admin allow-list: node/mgmt subnet + admin workstations.
+  allowedCIDRs:
+    - "10.0.111.0/24"
+    - "10.0.110.0/24"
+
+storage:
+  webRoot:
+    # Longhorn provides RWX via an on-demand NFS share-manager (installed cluster-wide).
+    storageClass: "longhorn"
+    size: "20Gi"
+  adminDb:
+    storageClass: "longhorn"
+
+networking:
+  mode: bgp
+  lbPoolCIDR: "10.20.100.0/24"
+  # Must match the label this cluster's CiliumBGPPeerConfigs export
+  # (families[].advertisements.matchLabels.advertise).
+  advertiseGroup: "k3s-pod-cidrs"
+
+certManager:
+  enabled: true
+  issuer:
+    acme:
+      # << set to THIS site's internal ACME directory (step-ca / smallstep, etc.) >>
+      server: "https://ca.jhics.org/acme/acme/directory"
+      email: "pki@jhics.org"
+      # Replace the solver with this site's internal DNS-01 provider/webhook.
+      solvers:
+        - dns01:
+            rfc2136:
+              nameserver: "10.0.111.53:53"
+              tsigKeyName: "windep-acme"
+              tsigAlgorithm: HMACSHA256
+              tsigSecretSecretRef:
+                name: windep-acme-tsig
+                key: tsig-secret-key
+  certificates:
+    dnsNames:
+      api:   ["windep-api.jhics.org"]
+      web:   ["deploy.jhics.org"]
+      admin: ["admin.deploy.jhics.org"]

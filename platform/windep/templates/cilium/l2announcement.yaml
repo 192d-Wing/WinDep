@@ -1,0 +1,25 @@
+{{- if eq .Values.networking.mode "l2" }}
+# ALTERNATIVE to BGP: Cilium L2 announcement (ARP/NDP).
+#
+# NOTE: L2 is NOT anycast. A single elected node answers ARP for each VIP at a time (with
+# failover). Use only on a flat L2 segment where you cannot peer BGP; prefer networking.mode
+#=bgp for true anycast/ECMP. Requires Cilium installed with l2announcements.enabled=true and
+# kube-proxy replacement.
+#
+# Selects the same windep.dev/lb-anycast Services the LB pool draws from (windep-web +
+# windep-admin), so their LoadBalancer VIPs get announced.
+apiVersion: cilium.io/v2alpha1
+kind: CiliumL2AnnouncementPolicy
+metadata:
+  name: windep-l2
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "cilium") | nindent 4 }}
+spec:
+  serviceSelector:
+    matchLabels:
+      windep.dev/lb-anycast: "true"
+  interfaces:
+    - "^eth[0-9]+"
+  externalIPs: true
+  loadBalancerIPs: true
+{{- end }}

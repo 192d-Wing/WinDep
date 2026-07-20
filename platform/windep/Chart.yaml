@@ -1,0 +1,26 @@
+apiVersion: v2
+name: windep
+description: >-
+  WinDep deploy platform — the telemetry/ZTP API (windep-api), the nginx deploy
+  server that serves the boot/WIM/config payload tree (windep-web), and the
+  Cloudscape admin console (windep-admin), plus Cilium anycast LB/BGP wiring and
+  optional cert-manager ACME TLS. Replaces the former Kustomize base + overlays.
+type: application
+# Chart version — bump on chart changes. appVersion tracks the admin image tag.
+version: 0.1.0
+appVersion: "0.1.17"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/192d-Wing/WinDep
+sources:
+  - https://github.com/192d-Wing/WinDep
+maintainers:
+  - name: 192d Wing
+keywords:
+  - windep
+  - winpe
+  - imaging
+  - ztp
+annotations:
+  # cert-manager (for TLS) and Cilium (for the LB/BGP CRDs) are cluster prerequisites,
+  # not subcharts — see platform/README.md.
+  windep.dev/requires: "cilium, cert-manager (optional)"

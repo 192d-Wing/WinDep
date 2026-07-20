@@ -1,0 +1,23 @@
+{{- if .Values.certManager.enabled }}
+{{- $iss := .Values.certManager.issuer }}
+# cert-manager ACME Issuer for the internal CA. Certs issued here MUST chain to the root
+# baked into boot.wim — point acme.server at your INTERNAL ACME directory (step-ca etc.),
+# never public Let's Encrypt. cert-manager supports dns01/http01 solvers only.
+apiVersion: cert-manager.io/v1
+kind: {{ $iss.kind }}
+metadata:
+  name: {{ $iss.name }}
+  {{- if eq $iss.kind "Issuer" }}
+  namespace: {{ include "windep.namespace" . }}
+  {{- end }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "tls") | nindent 4 }}
+spec:
+  acme:
+    server: {{ $iss.acme.server | quote }}
+    email: {{ $iss.acme.email | quote }}
+    privateKeySecretRef:
+      name: {{ $iss.acme.privateKeySecretRef }}
+    solvers:
+      {{- toYaml $iss.acme.solvers | nindent 6 }}
+{{- end }}

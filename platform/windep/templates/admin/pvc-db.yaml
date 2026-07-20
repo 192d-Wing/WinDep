@@ -1,0 +1,18 @@
+# Datastore volume for the admin's SQLite DB (deployment telemetry + audit trail).
+# RWO: only the single-replica admin pod mounts it, so SQLite's single-writer model holds.
+# Use a replicated class (e.g. longhorn) rather than local-path so the audit trail survives
+# a node loss. Small — this is metadata, not payloads.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: windep-admin-db
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "admin") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.storage.adminDb.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.adminDb.size | quote }}

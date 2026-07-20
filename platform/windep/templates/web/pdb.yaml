@@ -1,0 +1,16 @@
+{{- if .Values.web.pdb.enabled }}
+# Keep at least one deploy-server replica serving during voluntary disruptions
+# (node drain, rollout) so the anycast VIP never fully withdraws.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: windep-web
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.web.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "windep.selectorLabels" (dict "ctx" $ "component" "web") | nindent 6 }}
+{{- end }}

@@ -1,0 +1,78 @@
+# WinDep deploy web server — Iron Bank nginx serving the payload tree from the PV and
+# reverse-proxying /api/* to windep-api. Multi-replica across nodes so the shared anycast
+# VIP is HA; all replicas mount the same RWX PVC.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: windep-web
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "windep.selectorLabels" (dict "ctx" $ "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "windep.selectorLabels" (dict "ctx" $ "component" "web") | nindent 8 }}
+      annotations:
+        # roll the pods when nginx.conf changes
+        checksum/config: {{ include (print $.Template.BasePath "/web/configmap-nginx.yaml") . | sha256sum }}
+    spec:
+      {{- include "windep.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: "{{ .Values.images.nginx.repo }}:{{ .Values.images.nginx.tag }}"
+          imagePullPolicy: {{ .Values.images.nginx.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 8443
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - name: web-root
+              mountPath: /srv/windep
+              readOnly: true
+            - name: nginx-conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: web-root
+          persistentVolumeClaim:
+            claimName: windep-web-root
+        - name: nginx-conf
+          configMap:
+            name: windep-web-nginx
+        - name: tls
+          secret:
+            # Serving cert for the deploy VIP, chaining to the internal CA WinPE trusts.
+            secretName: {{ .Values.secrets.webTls }}
+        - name: tmp
+          emptyDir: {}

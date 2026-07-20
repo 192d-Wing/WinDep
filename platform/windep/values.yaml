@@ -1,0 +1,162 @@
+# =============================================================================
+# WinDep platform — default values.
+#
+# These defaults mirror the former Kustomize base (safe, generic values). Per-site
+# specifics (VIPs, StorageClasses, admin allow-list, image tags, ACME server) live in
+# values-k3s.yaml / values-example.yaml — pass one with `-f`:
+#
+#   helm install windep platform/windep -n windep --create-namespace \
+#     -f platform/windep/values-k3s.yaml
+# =============================================================================
+
+# Namespace the chart deploys into. The chart also renders a Namespace object
+# (namespace.create) so a bare `helm install` works; set create=false if you manage
+# the namespace out-of-band (e.g. `helm -n windep --create-namespace`).
+namespace:
+  name: windep
+  create: true
+
+# ---- container images -------------------------------------------------------
+images:
+  api:
+    repo: ghcr.io/192d-wing/windep-api
+    tag: "0.1.4"
+    pullPolicy: IfNotPresent
+  admin:
+    repo: ghcr.io/192d-wing/windep-admin
+    tag: "0.1.17"
+    pullPolicy: IfNotPresent
+  nginx:
+    # Iron Bank hardened nginx (registry1.dso.mil / Repo One — needs the pull secret
+    # below). Pin/verify the tag for your ATO.
+    repo: registry1.dso.mil/ironbank/opensource/nginx/nginx
+    tag: "1.30.3"
+    pullPolicy: IfNotPresent
+
+# imagePullSecrets applied to the web (Iron Bank nginx) pods. Create it with your
+# Repo One creds:
+#   kubectl -n windep create secret docker-registry repo1-pull \
+#     --docker-server=registry1.dso.mil \
+#     --docker-username=<REPO1_USER> --docker-password=<REPO1_TOKEN>
+imagePullSecrets:
+  - repo1-pull
+
+# ---- secret names (referenced; not created by this chart) -------------------
+# TLS secrets are populated by cert-manager when certManager.enabled=true; otherwise
+# create them yourself (kubectl create secret tls ...). adminAuth/configKey are optional
+# app secrets (the deployments mark them optional). repo1Pull is the Iron Bank pull secret.
+secrets:
+  apiTls: windep-api-tls
+  webTls: windep-web-tls
+  adminTls: windep-admin-tls
+  adminAuth: windep-admin-auth       # key: token   (optional bearer token)
+  configKey: windep-admin-config-key # key: key     (base64 32-byte AES key)
+  repo1Pull: repo1-pull
+
+# ---- windep-api (telemetry / ZTP resolve) -----------------------------------
+api:
+  replicas: 2                        # HPA manages this when hpa.enabled; keep >=2 for HA
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    cpuUtilization: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # OPA decision endpoint for server-side policy re-eval before releasing creds.
+  # Empty = enrollment-only gate. Set to your OPA URL to enforce.
+  policyUrl: ""
+  policyFailAction: hold             # unreachable/undefined OPA -> refuse (never release creds)
+  # Best-effort telemetry forward to the admin datastore (in-cluster Service DNS).
+  adminIngestUrl: "https://windep-admin.windep.svc.cluster.local:443/api"
+  resources:
+    requests: { cpu: 100m, memory: 64Mi, ephemeral-storage: 32Mi }
+    limits:   { cpu: 500m, memory: 128Mi, ephemeral-storage: 128Mi }
+
+# ---- windep-web (nginx deploy server) ---------------------------------------
+web:
+  replicas: 2
+  vip: "10.0.100.10"                 # LoadBalancer VIP (anycast) — overridden per site
+  pdb:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: "1", memory: 256Mi }
+
+# ---- windep-admin (Cloudscape UI + RW file API) -----------------------------
+admin:
+  replicas: 1                        # sole RW writer; strategy is Recreate
+  vip: "10.0.100.11"                 # separate admin LoadBalancer VIP
+  gomemlimit: "460MiB"               # bound Go heap under the 1Gi cap during multi-GB uploads
+  # NetworkPolicy ingress allow-list for the RW admin VIP (source subnets). The api->admin
+  # ingest rule is always added on top of this.
+  allowedCIDRs:
+    - "10.0.0.0/8"
+  resources:
+    requests: { cpu: 50m, memory: 128Mi, ephemeral-storage: 64Mi }
+    limits:   { cpu: "1", memory: 1Gi, ephemeral-storage: 256Mi }
+
+# ---- persistent storage -----------------------------------------------------
+storage:
+  # Shared payload tree (config/, images/*.wim, boot/). admin mounts RW, api+web RO.
+  # Needs a ReadWriteMany StorageClass (NFS, Longhorn share-manager, CephFS...).
+  webRoot:
+    storageClass: "nfs-client"
+    size: "20Gi"
+    accessMode: ReadWriteMany
+  # admin SQLite datastore (deployment telemetry + audit trail). RWO, single writer.
+  adminDb:
+    storageClass: "longhorn"
+    size: "2Gi"
+
+# ---- networking (Cilium LB + advertisement) ---------------------------------
+networking:
+  # bgp = CiliumBGPAdvertisement (true anycast/ECMP; peering is cluster-owned).
+  # l2  = CiliumL2AnnouncementPolicy (single-node ARP, NOT anycast) — flat-L2 fallback.
+  mode: bgp
+  lbPoolCIDR: "10.0.100.0/24"        # CiliumLoadBalancerIPPool block the VIPs draw from
+  advertiseGroup: "windep-anycast"   # label the cluster's BGP peer configs export (bgp mode)
+
+# ---- cert-manager ACME TLS --------------------------------------------------
+# When enabled the chart renders a namespaced ACME Issuer + a Certificate per service,
+# writing into secrets.{apiTls,webTls,adminTls}. cert-manager must be installed
+# cluster-wide. The ACME server MUST be your INTERNAL ACME CA (e.g. step-ca) so issued
+# certs chain to the internal root baked into boot.wim — public Let's Encrypt certs would
+# NOT validate against WinPE's trust store.
+certManager:
+  enabled: true
+  issuer:
+    kind: Issuer                     # Issuer (namespaced) | ClusterIssuer
+    name: windep-acme
+    acme:
+      server: "https://ca.internal.example/acme/acme/directory"  # << set to your internal ACME directory
+      email: "pki@example.internal"
+      privateKeySecretRef: windep-acme-account-key
+      # Raw cert-manager solver list (pass-through). cert-manager supports dns01 and
+      # http01 ONLY (not tls-alpn-01). Replace the stub with your internal DNS-01
+      # provider/webhook, or an http01 ingress solver. See:
+      # https://cert-manager.io/docs/configuration/acme/
+      solvers:
+        - dns01:
+            # EXAMPLE stub — replace with your provider (rfc2136, route53, webhook, ...).
+            # rfc2136 shown because it suits an internal authoritative DNS:
+            rfc2136:
+              nameserver: "10.0.0.53:53"
+              tsigKeyName: "windep-acme"
+              tsigAlgorithm: HMACSHA256
+              tsigSecretSecretRef:
+                name: windep-acme-tsig
+                key: tsig-secret-key
+  # DNS names (SANs) per service cert. Match the hostnames WinPE / admins resolve.
+  certificates:
+    duration: 2160h                  # 90d
+    renewBefore: 360h                # 15d
+    dnsNames:
+      api:   ["windep-api.example.internal"]
+      web:   ["deploy.example.internal"]
+      admin: ["admin.deploy.example.internal"]
+
+# Common labels merged onto every rendered object (in addition to the chart's own).
+commonLabels: {}

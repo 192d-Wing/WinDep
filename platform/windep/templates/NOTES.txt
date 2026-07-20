@@ -1,0 +1,35 @@
+WinDep platform installed as release "{{ .Release.Name }}" in namespace "{{ include "windep.namespace" . }}".
+
+Workloads:
+  - windep-api    (ClusterIP, fronted by windep-web /api/*)
+  - windep-web    (LoadBalancer VIP {{ .Values.web.vip }})   deploy server: config/, images/*.wim, boot/
+  - windep-admin  (LoadBalancer VIP {{ .Values.admin.vip }})  read-write console + audit trail
+
+Networking mode: {{ .Values.networking.mode }} (LB pool {{ .Values.networking.lbPoolCIDR }})
+
+PREREQUISITES (not created by this chart):
+{{- if .Values.certManager.enabled }}
+  * cert-manager installed cluster-wide. This release renders an ACME Issuer
+    "{{ .Values.certManager.issuer.name }}" ({{ .Values.certManager.issuer.kind }}) against:
+        {{ .Values.certManager.issuer.acme.server }}
+    Check issuance:  kubectl -n {{ include "windep.namespace" . }} get certificate,certificaterequest
+    NOTE: the ACME server must be your INTERNAL CA so certs chain to the root baked into
+    boot.wim. Public Let's Encrypt certs will NOT validate against WinPE's trust store.
+{{- else }}
+  * TLS secrets (create these — internal-CA certs):
+        kubectl -n {{ include "windep.namespace" . }} create secret tls {{ .Values.secrets.apiTls }}   --cert=api.crt   --key=api.key
+        kubectl -n {{ include "windep.namespace" . }} create secret tls {{ .Values.secrets.webTls }}   --cert=deploy.crt --key=deploy.key
+        kubectl -n {{ include "windep.namespace" . }} create secret tls {{ .Values.secrets.adminTls }} --cert=admin.crt  --key=admin.key
+{{- end }}
+  * Iron Bank pull secret (windep-web nginx):
+        kubectl -n {{ include "windep.namespace" . }} create secret docker-registry {{ .Values.secrets.repo1Pull }} \
+          --docker-server=registry1.dso.mil --docker-username=<REPO1_USER> --docker-password=<REPO1_TOKEN>
+  * OPTIONAL app secrets (encryption / auth). Set CONFIG_KEY once WinPE carries the matching key:
+        kubectl -n {{ include "windep.namespace" . }} create secret generic {{ .Values.secrets.configKey }} --from-literal=key="$(openssl rand -base64 32)"
+        kubectl -n {{ include "windep.namespace" . }} create secret generic {{ .Values.secrets.adminAuth }} --from-literal=token="<bearer>"
+
+Next:
+  kubectl -n {{ include "windep.namespace" . }} get pods,svc
+  kubectl -n {{ include "windep.namespace" . }} get svc windep-web windep-admin -o wide   # confirm the VIPs are assigned
+Then upload payloads via the admin console at https://{{ .Values.admin.vip }}/ and wire DHCP
+network boot per platform/README.md.

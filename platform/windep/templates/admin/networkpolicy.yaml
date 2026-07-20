@@ -1,0 +1,35 @@
+# Lock the read-write admin surface to the admin subnet(s) only. The client provisioning
+# VLAN reaches the RO nginx VIP, never this one. admin.allowedCIDRs sets the source ranges;
+# the windep-api ingest rule is always appended so telemetry forwarding keeps working.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: windep-admin
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "admin") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "windep.selectorLabels" (dict "ctx" $ "component" "admin") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # admin UI reachable from the configured admin subnet(s)
+    - from:
+        {{- range .Values.admin.allowedCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8443
+    # windep-api pods forward deployment telemetry to /api/ingest. Always allowed so
+    # tightening the ipBlock list above never breaks ingest.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "windep.selectorLabels" (dict "ctx" $ "component" "api") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443

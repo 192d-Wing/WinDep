@@ -1,0 +1,15 @@
+# Cilium LoadBalancer IPAM pool — the block the anycast VIPs are allocated from.
+# Both windep-web and windep-admin Services pin their VIP out of this pool via the
+# windep.dev/lb-anycast label.
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: windep-anycast-pool
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "cilium") | nindent 4 }}
+spec:
+  blocks:
+    - cidr: {{ .Values.networking.lbPoolCIDR | quote }}
+  serviceSelector:
+    matchLabels:
+      windep.dev/lb-anycast: "true"

@@ -1,0 +1,27 @@
+# Admin VIP — separate from the client deploy VIP so the RW surface can be
+# firewalled/NetworkPolicy'd independently. Shares the Cilium LB pool + BGP advertisement
+# via the windep.dev/lb-anycast label.
+#
+# externalTrafficPolicy: Local preserves the client source IP so the NetworkPolicy ipBlock
+# lockdown actually matches (SNAT under Cluster would hide it). With a single replica, only
+# its node advertises the VIP — fine for an admin-only endpoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: windep-admin
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "admin") | nindent 4 }}
+    windep.dev/lb-anycast: "true"
+  annotations:
+    io.cilium/lb-ipam-ips: {{ .Values.admin.vip | quote }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    {{- include "windep.selectorLabels" (dict "ctx" $ "component" "admin") | nindent 4 }}
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP
