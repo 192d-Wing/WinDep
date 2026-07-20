@@ -75,8 +75,11 @@ mount. cert-manager issues and auto-renews them — no manual cert rotation.
 > **The ACME server MUST be your internal ACME CA** (e.g. step-ca / smallstep), so issued certs
 > chain to the internal root **baked into `boot.wim`**. WinPE trusts only that root — a public
 > Let's Encrypt cert would fail validation on every WinPE HTTPS fetch. cert-manager supports the
-> **DNS-01** and **HTTP-01** solvers only (not TLS-ALPN-01); set `certManager.issuer.acme.solvers`
-> to your internal DNS-01 provider/webhook (the values files ship an `rfc2136` stub).
+> **DNS-01** and **HTTP-01** solvers only (not TLS-ALPN-01). Set `certManager.issuer.acme.solvers`
+> accordingly — `platform/windep/values.yaml` documents both a DNS-01 (`rfc2136`) stub and an
+> HTTP-01 (ingress) example. DNS-01 needs no inbound reachability (good for isolated VLANs);
+> HTTP-01 is simpler but requires an Ingress controller (this chart ships none) and the internal
+> ACME server reaching the deploy VIP on :80.
 
 Prereqs the ACME flow needs: the ACME account private-key secret is created by cert-manager on
 first use; a DNS-01 solver typically needs a credential secret (e.g. `windep-acme-tsig` for

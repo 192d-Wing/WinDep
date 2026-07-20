@@ -135,13 +135,14 @@ certManager:
       email: "pki@example.internal"
       privateKeySecretRef: windep-acme-account-key
       # Raw cert-manager solver list (pass-through). cert-manager supports dns01 and
-      # http01 ONLY (not tls-alpn-01). Replace the stub with your internal DNS-01
-      # provider/webhook, or an http01 ingress solver. See:
-      # https://cert-manager.io/docs/configuration/acme/
+      # http01 ONLY (not tls-alpn-01). See https://cert-manager.io/docs/configuration/acme/
+      #
+      # Pick ONE style below (or combine, scoped by selector):
+      #
+      # (a) DNS-01 — no inbound reachability needed; the ACME server validates a TXT
+      #     record. Best for internal/isolated VLANs. rfc2136 shown (internal BIND):
       solvers:
         - dns01:
-            # EXAMPLE stub — replace with your provider (rfc2136, route53, webhook, ...).
-            # rfc2136 shown because it suits an internal authoritative DNS:
             rfc2136:
               nameserver: "10.0.0.53:53"
               tsigKeyName: "windep-acme"
@@ -149,6 +150,26 @@ certManager:
               tsigSecretSecretRef:
                 name: windep-acme-tsig
                 key: tsig-secret-key
+      #
+      # (b) HTTP-01 — the ACME server fetches http://<dnsName>/.well-known/acme-challenge/...
+      #     on :80. Simpler (no DNS creds), but REQUIRES an Ingress controller: cert-manager
+      #     spins up a temporary solver pod + Service + Ingress. This chart ships no Ingress,
+      #     so install one (ingress-nginx, Traefik, ...) and make the internal ACME server able
+      #     to reach the deploy VIP on :80. Replace the dns01 block above with:
+      #
+      #   solvers:
+      #     - http01:
+      #         ingress:
+      #           ingressClassName: nginx   # your controller's IngressClass
+      #           # serviceType: ClusterIP  # (default; use NodePort if the LB can't hairpin)
+      #
+      #     # Scope a solver to specific hosts with a selector (e.g. HTTP-01 only for deploy):
+      #     - http01:
+      #         ingress:
+      #           ingressClassName: nginx
+      #       selector:
+      #         dnsNames:
+      #           - deploy.example.internal
   # DNS names (SANs) per service cert. Match the hostnames WinPE / admins resolve.
   certificates:
     duration: 2160h                  # 90d
