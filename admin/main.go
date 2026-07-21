@@ -618,7 +618,17 @@ func handleConfigPut(dataDir string) fiber.Handler {
 // readBody reads the (stream-mode) request body, bounded by max so a hostile body can't
 // buffer gigabytes and OOM the pod.
 func readBody(c *fiber.Ctx, max int64) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(c.Context().RequestBodyStream(), max))
+	// StreamRequestBody (main app, for multi-GB uploads) exposes the body only via
+	// RequestBodyStream(). The ingest app runs in buffered mode (tiny JSON), where that
+	// stream is nil — fall back to the buffered body then.
+	if s := c.Context().RequestBodyStream(); s != nil {
+		return io.ReadAll(io.LimitReader(s, max))
+	}
+	b := c.Body()
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("body exceeds %d bytes", max)
+	}
+	return b, nil
 }
 
 // readJSON decodes the (stream-mode) request body into v. StreamRequestBody makes
@@ -851,11 +861,10 @@ func newIngestApp(st *Store) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:               "windep-admin-ingest",
 		DisableStartupMessage: true,
-		// readBody reads c.Context().RequestBodyStream(), which only works with
-		// StreamRequestBody — without it RequestBodyStream() is nil and readBody panics
-		// (caught by recover as a bare 500). Must match the main app.
-		StreamRequestBody: true,
-		BodyLimit:         8 * 1024 * 1024,
+		// Buffered mode (NOT StreamRequestBody): ingest payloads are tiny JSON. Streaming
+		// the body over our custom mTLS tls.Listener returned a server-level 500; buffered
+		// reads (readBody falls back to c.Body()) avoid that path entirely.
+		BodyLimit: 8 * 1024 * 1024,
 	})
 	app.Use(recover.New(recover.Config{
 		EnableStackTrace: true,
