@@ -48,6 +48,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+              # The official Caddy binary carries a cap_net_bind_service file capability;
+              # under no_new_privs the kernel refuses to exec it unless that cap is in the
+              # container's bounding set (even though Caddy binds :8443, not a low port).
+              add: ["NET_BIND_SERVICE"]
           # TCP checks: an HTTPS GET would need a valid host/cert; a listen check is enough.
           livenessProbe:
             tcpSocket: { port: 8443 }

@@ -160,6 +160,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+              add: ["NET_BIND_SERVICE"] # Caddy binary's file cap; required to exec under no_new_privs
           livenessProbe:
             tcpSocket: { port: 8443 }
             initialDelaySeconds: 5
