@@ -8,7 +8,7 @@ description: >-
 type: application
 # Chart version — bump on chart changes. appVersion tracks the admin image tag.
 version: 0.3.0
-appVersion: "0.1.23"
+appVersion: "0.1.24"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/192d-Wing/WinDep
 sources:

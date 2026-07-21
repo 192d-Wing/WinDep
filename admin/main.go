@@ -884,20 +884,14 @@ func startIngestListener(st *Store) {
 	if iaddr == "" {
 		return
 	}
-	cfg, err := serverTLSConfig(os.Getenv("INGEST_TLS_CERT"), os.Getenv("INGEST_TLS_KEY"), os.Getenv("INGEST_CLIENT_CA"), true)
-	if err != nil {
-		slog.Error("ingest tls config", "err", err.Error())
-		os.Exit(1)
-	}
-	ln, err := tlsListener(iaddr, cfg)
-	if err != nil {
-		slog.Error("ingest listen", "err", err.Error())
-		os.Exit(1)
-	}
+	cert, key, clientCA := os.Getenv("INGEST_TLS_CERT"), os.Getenv("INGEST_TLS_KEY"), os.Getenv("INGEST_CLIENT_CA")
 	iapp := newIngestApp(st)
 	go func() {
 		slog.Info("ingest listener (mTLS)", "addr", iaddr)
-		if err := iapp.Listener(ln); err != nil {
+		// Fiber's native mutual-TLS server (RequireAndVerifyClientCert), matching the
+		// working main-app ListenTLS path — a hand-rolled tls.Listener + app.Listener
+		// misbehaved over the cluster's service network.
+		if err := iapp.ListenMutualTLS(iaddr, cert, key, clientCA); err != nil {
 			slog.Error("ingest listener stopped", "err", err.Error())
 			os.Exit(1)
 		}
