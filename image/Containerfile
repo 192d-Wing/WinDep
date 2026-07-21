@@ -12,7 +12,7 @@
 # so CGO stays OFF, the binary stays static, and it cross-compiles for every arch
 # without OpenSSL/CGO/QEMU. GOFIPS140 also bakes the runtime fips140 GODEBUG to "on".
 
-ARG BUILDER_IMAGE=docker.io/library/golang:1.25-alpine
+ARG BUILDER_IMAGE=docker.io/library/golang:1.26.5-alpine
 # Runtime base — set per architecture by the build matrix:
 #   amd64 -> registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
 #   arm64 -> registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64

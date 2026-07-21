@@ -1,6 +1,6 @@
 module github.com/192d-Wing/WinDep/api
 
-go 1.25.11
+go 1.26.5
 
 require (
 	github.com/ansrivas/fiberprometheus/v2 v2.17.0
