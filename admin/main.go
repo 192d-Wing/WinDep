@@ -857,7 +857,12 @@ func newIngestApp(st *Store) *fiber.App {
 		StreamRequestBody: true,
 		BodyLimit:         8 * 1024 * 1024,
 	})
-	app.Use(recover.New())
+	app.Use(recover.New(recover.Config{
+		EnableStackTrace: true,
+		StackTraceHandler: func(_ *fiber.Ctx, e any) {
+			slog.Error("ingest panic recovered", "err", fmt.Sprint(e))
+		},
+	}))
 	registerIngest(app.Group("/api"), st)
 	return app
 }

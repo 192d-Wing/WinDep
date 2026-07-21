@@ -2,13 +2,47 @@ package main
 
 import (
 	"database/sql"
+	"io"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
+
+// TestIngestAppRealListener drives newIngestApp over a REAL TCP listener + http.Client
+// (not app.Test()), matching the cluster request path where readBody reads the streamed
+// body. Reproduces the ingest 500 seen in live validation if the body handling panics.
+func TestIngestAppRealListener(t *testing.T) {
+	st, err := openStore(filepath.Join(t.TempDir(), "real.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.close()
+	app := newIngestApp(st)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = app.Listener(ln) }()
+	defer func() { _ = app.Shutdown() }()
+	time.Sleep(150 * time.Millisecond) // let the server come up
+
+	resp, err := http.Post("http://"+ln.Addr().String()+"/api/ingest/status",
+		"application/json", strings.NewReader(`{"serial":"RT-1","state":"success","percent":100}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != fiber.StatusAccepted {
+		t.Fatalf("real-listener ingest: got %d (%s), want 202", resp.StatusCode, string(body))
+	}
+}
 
 // TestIngestAppAcceptsStatus drives newIngestApp end-to-end (readBody uses
 // RequestBodyStream, which panics unless the app sets StreamRequestBody) and asserts a
