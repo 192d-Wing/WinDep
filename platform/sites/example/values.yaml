@@ -1,43 +1,89 @@
 # =============================================================================
-# Site: example  (full-Kubernetes cluster, Cilium CNI + BGP control plane)
+# Site: example  —  caddyAcme edge + backend mTLS (production template)
 #
-# A per-site values overlay. Helm merges this over the chart defaults
-# (platform/windep/values.yaml), so it holds only this site's overrides. Copy this
-# directory to platform/sites/<your-site>/ and edit the VIPs, StorageClass,
-# admin.allowedCIDRs, image tags, and the certManager.issuer.acme block.
+# Per-site values overlay (Helm merges it over platform/windep/values.yaml). Copy this
+# directory to platform/sites/<your-site>/ and fill in the << >> placeholders.
 #
 #   helm install windep platform/windep -n windep --create-namespace \
 #     -f platform/sites/example/values.yaml
-#   helm upgrade windep platform/windep -n windep \
-#     -f platform/sites/example/values.yaml
+#
+# Three things you provide, in THREE places (keys never go in this file / git):
+#
+#   1. VALUES (here): hostnames, ACME directory URL, and the NAMES of the secrets below.
+#
+#   2. SECRETS (kubectl — the cert/key material lives in the cluster, out of git):
+#        # internal root CA that boot.wim trusts (Caddy trusts the ACME server with it):
+#        kubectl -n windep create secret generic windep-internal-ca \
+#          --from-file=ca.crt=/path/to/internal-root.pem
+#        # mTLS CA keypair (a subordinate off your root) for cert-manager's CA issuer:
+#        kubectl -n windep create secret tls windep-internal-ca-key \
+#          --cert=/path/to/mtls-ca.crt --key=/path/to/mtls-ca.key
+#        # Iron Bank pull secret (windep-web/nginx is not used in caddyAcme, but api/admin
+#        # pull from ghcr; create only if your registry needs auth):
+#        kubectl -n windep create secret docker-registry repo1-pull ...
+#
+#   3. DNS (your zone — outside k8s): A records to the anycast VIPs below:
+#        deploy.example.internal        A  10.0.100.10   (deploy VIP)
+#        windep-api.example.internal    A  10.0.100.10   (same deploy VIP; Caddy routes by SNI)
+#        admin.deploy.example.internal  A  10.0.100.11   (admin VIP)
+#
+# Prereqs: cert-manager + Cilium (LB IPAM + BGP) installed; a hardened Caddy image
+# (chart default ghcr.io/192d-wing/windep-caddy, built by image-caddy.yml); an RWX
+# StorageClass. See platform/README.md.
 # =============================================================================
 
-images:
-  admin:
-    tag: "0.1.24"
-  # api tag inherits the chart default (0.1.5)
+# ---- TLS: Caddy edge (ACME TLS-ALPN-01) + backend mTLS ----------------------
+tls:
+  mode: caddyAcme
 
-# Anycast LoadBalancer VIPs (pinned from the Cilium LB pool below).
+caddyAcme:
+  # Your INTERNAL ACME directory (step-ca / smallstep). Its root MUST be the CA baked
+  # into boot.wim — a public Let's Encrypt cert would fail WinPE validation.
+  server: "https://<< your-acme-host >>/acme/<< provisioner >>/directory"
+  email:  "pki@example.internal"
+  # Secret (key: ca.crt) holding the internal root CA — Caddy trusts the ACME server
+  # with it. Create it with kubectl (see header); referenced by name only.
+  caRootSecret: windep-internal-ca
+  # certmagic shared storage for HA across the multi-replica deploy edge (RWX, separate
+  # from the payload PV so it is never web-served).
+  storage:
+    storageClass: "longhorn"
+    size: "1Gi"
+  # Public hostnames Caddy obtains certs for (SNI). Must match your DNS + boot.wim.
+  hosts:
+    web:   ["deploy.example.internal", "windep-api.example.internal"]
+    admin: ["admin.deploy.example.internal"]
+
+mtls:
+  enabled: true
+  caIssuer:
+    name: windep-internal-ca
+    kind: Issuer
+    # Secret (tls.crt + tls.key) = the mTLS CA keypair for cert-manager's CA issuer.
+    # Create it with kubectl (see header); referenced by name only.
+    caSecret: windep-internal-ca-key
+
+# ---- anycast VIPs (pinned from the Cilium LB pool) --------------------------
 web:
   vip: "10.0.100.10"
 
 admin:
   vip: "10.0.100.11"
-  # Source subnets allowed to reach the read-write admin VIP. Widen/narrow to the
-  # real admin range(s) for this site.
+  # Source subnets allowed to reach the read-write admin VIP.
   allowedCIDRs:
     - "10.0.0.0/8"
 
+# ---- storage ----------------------------------------------------------------
 storage:
   webRoot:
     # Payload PV (config/, images/*.wim, boot/). Needs a ReadWriteMany StorageClass.
-    storageClass: "nfs-client"
+    storageClass: "longhorn"
     size: "20Gi"
   adminDb:
     storageClass: "longhorn"
 
+# ---- networking -------------------------------------------------------------
 networking:
-  # bgp = anycast/ECMP (peering is cluster-owned). l2 = single-node ARP fallback.
   mode: bgp
   lbPoolCIDR: "10.0.100.0/24"
   # Must match the label this cluster's CiliumBGPPeerConfigs export
@@ -45,31 +91,7 @@ networking:
   # never advertised.
   advertiseGroup: "windep-anycast"
 
-certManager:
-  enabled: true
-  issuer:
-    kind: Issuer
-    name: windep-acme
-    acme:
-      # << set to THIS site's INTERNAL ACME directory (step-ca / smallstep, etc.) >>
-      # Must be the internal CA whose root is baked into boot.wim — a public Let's
-      # Encrypt cert would fail WinPE's HTTPS validation.
-      server: "https://ca.internal.example/acme/acme/directory"
-      email: "pki@example.internal"
-      privateKeySecretRef: windep-acme-account-key
-      # Replace with this site's internal DNS-01 provider/webhook (cert-manager
-      # supports dns01/http01 only — not tls-alpn-01). rfc2136 stub shown.
-      solvers:
-        - dns01:
-            rfc2136:
-              nameserver: "10.0.0.53:53"
-              tsigKeyName: "windep-acme"
-              tsigAlgorithm: HMACSHA256
-              tsigSecretSecretRef:
-                name: windep-acme-tsig
-                key: tsig-secret-key
-  certificates:
-    dnsNames:
-      api:   ["windep-api.internal.example"]
-      web:   ["deploy.internal.example"]
-      admin: ["admin.deploy.internal.example"]
+# Images inherit the chart defaults (windep-api, windep-admin, windep-caddy). Pin here
+# only to override a specific tag, e.g.:
+# images:
+#   admin: { tag: "0.1.24" }
