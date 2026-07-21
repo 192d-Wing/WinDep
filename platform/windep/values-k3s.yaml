@@ -11,8 +11,8 @@
 
 images:
   admin:
-    tag: "0.1.17"
-  # api tag inherits the chart default (0.1.4)
+    tag: "0.1.24"
+  # api tag inherits the chart default (0.1.5)
 
 web:
   vip: "10.20.100.10"

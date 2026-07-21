@@ -48,6 +48,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+              # The official Caddy binary carries a cap_net_bind_service file capability;
+              # under no_new_privs the kernel refuses to exec it unless that cap is in the
+              # container's bounding set (even though Caddy binds :8443, not a low port).
+              add: ["NET_BIND_SERVICE"]
           # TCP checks: an HTTPS GET would need a valid host/cert; a listen check is enough.
           livenessProbe:
             tcpSocket: { port: 8443 }
@@ -70,6 +74,11 @@ spec:
             - name: ca-root
               mountPath: /etc/caddy/ca
               readOnly: true
+            {{- if .Values.mtls.enabled }}
+            - name: edge-client
+              mountPath: /etc/caddy/client
+              readOnly: true
+            {{- end }}
             - name: acme
               mountPath: /data
             - name: tmp
@@ -84,6 +93,12 @@ spec:
         - name: ca-root
           secret:
             secretName: {{ .Values.caddyAcme.caRootSecret }}
+        {{- if .Values.mtls.enabled }}
+        - name: edge-client
+          secret:
+            # cert-manager CA-issued client cert (+ ca.crt) for the edge → windep-api mTLS.
+            secretName: windep-edge-client
+        {{- end }}
         - name: acme
           persistentVolumeClaim:
             claimName: windep-caddy-acme

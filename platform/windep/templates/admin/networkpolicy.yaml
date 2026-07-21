@@ -25,7 +25,8 @@ spec:
         - protocol: TCP
           port: 8443
     # windep-api pods forward deployment telemetry to /api/ingest. Always allowed so
-    # tightening the ipBlock list above never breaks ingest.
+    # tightening the ipBlock list above never breaks ingest. With mtls the ingest moves
+    # to the dedicated :8444 mTLS listener, so allow that port too.
     - from:
         - podSelector:
             matchLabels:
@@ -33,3 +34,7 @@ spec:
       ports:
         - protocol: TCP
           port: 8443
+        {{- if .Values.mtls.enabled }}
+        - protocol: TCP
+          port: 8444
+        {{- end }}

@@ -20,11 +20,11 @@ namespace:
 images:
   api:
     repo: ghcr.io/192d-wing/windep-api
-    tag: "0.1.4"
+    tag: "0.1.5"   # 0.1.5 adds app-level mTLS (backward compatible; mTLS off unless configured)
     pullPolicy: IfNotPresent
   admin:
     repo: ghcr.io/192d-wing/windep-admin
-    tag: "0.1.17"
+    tag: "0.1.24"  # 0.1.20: deploy_event schema rebuild migration (NOT NULL drift) + ingest error logging
     pullPolicy: IfNotPresent
   nginx:
     # Iron Bank hardened nginx (registry1.dso.mil / Repo One — needs the pull secret
@@ -35,9 +35,9 @@ images:
     pullPolicy: IfNotPresent
   caddy:
     # Edge TLS terminator for tls.mode=caddyAcme (ACME TLS-ALPN-01 via certmagic).
-    # Prefer an Iron Bank Caddy for ATO parity — VERIFY availability in Repo One and
-    # pin the tag. Falls back to the public image if your policy allows it.
-    repo: registry1.dso.mil/ironbank/opensource/caddy/caddy
+    # WinDep's hardened Caddy — Caddy compiled from source (FIPS) on Iron Bank UBI,
+    # built by .github/workflows/image-caddy.yml. (Iron Bank ships no Caddy of its own.)
+    repo: ghcr.io/192d-wing/windep-caddy
     tag: "2.8.4"
     pullPolicy: IfNotPresent
 
@@ -86,6 +86,7 @@ api:
 web:
   replicas: 2
   vip: "10.0.100.10"                 # LoadBalancer VIP (anycast) — overridden per site
+  vip6: ""                           # optional IPv6 VIP → dual-stack (empty = IPv4-only)
   pdb:
     enabled: true
     minAvailable: 1
@@ -97,6 +98,7 @@ web:
 admin:
   replicas: 1                        # sole RW writer; strategy is Recreate
   vip: "10.0.100.11"                 # separate admin LoadBalancer VIP
+  vip6: ""                           # optional IPv6 admin VIP → dual-stack
   gomemlimit: "460MiB"               # bound Go heap under the 1Gi cap during multi-GB uploads
   # NetworkPolicy ingress allow-list for the RW admin VIP (source subnets). The api->admin
   # ingest rule is always added on top of this.
@@ -125,6 +127,7 @@ networking:
   # l2  = CiliumL2AnnouncementPolicy (single-node ARP, NOT anycast) — flat-L2 fallback.
   mode: bgp
   lbPoolCIDR: "10.0.100.0/24"        # CiliumLoadBalancerIPPool block the VIPs draw from
+  lbPoolCIDR6: ""                    # optional IPv6 CIDR block → dual-stack VIPs (empty = v4-only)
   advertiseGroup: "windep-anycast"   # label the cluster's BGP peer configs export (bgp mode)
 
 # ---- TLS mode ---------------------------------------------------------------
@@ -162,6 +165,27 @@ caddyAcme:
   hosts:
     web:   ["deploy.example.internal", "windep-api.example.internal"]
     admin: ["admin.deploy.example.internal"]
+
+# ---- backend mTLS (east-west) -----------------------------------------------
+# App-level mutual TLS on the machine-to-machine hops: Caddy edge → windep-api, and
+# windep-api → windep-admin ingest. Requires tls.mode=caddyAcme. Certs are minted by a
+# cert-manager CA issuer off your internal root (independent of the public ACME certs).
+#
+#   - windep-api serves mTLS on :8443 (VerifyClientCertIfGiven; /api requires a verified
+#     client cert — health/metrics stay open). The Caddy edge presents a client cert.
+#   - windep-admin runs a DEDICATED mTLS ingest listener on :8444 (RequireAndVerify) for
+#     windep-api telemetry, exposed as the ClusterIP Service windep-admin-ingest. The
+#     human UI listener is unchanged (no client cert), so browsers keep working.
+mtls:
+  enabled: false
+  # cert-manager CA issuer (kind: CA), backed by a Secret holding the internal CA
+  # keypair (tls.crt + tls.key). cert-manager mints server/client leaf certs off it.
+  caIssuer:
+    name: windep-internal-ca
+    kind: Issuer                    # Issuer (namespaced) | ClusterIssuer
+    caSecret: windep-internal-ca-key  # Secret (tls.crt+tls.key) = the internal CA
+  duration: 720h                    # 30d leaf certs
+  renewBefore: 120h                 # 5d
 
 # ---- cert-manager ACME TLS --------------------------------------------------
 # When enabled the chart renders a namespaced ACME Issuer + a Certificate per service,

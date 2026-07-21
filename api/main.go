@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
-	"crypto/tls"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -122,12 +121,9 @@ func handleReadyz(c *fiber.Ctx) error {
 var (
 	adminIngestURL   = os.Getenv("ADMIN_INGEST_URL")
 	adminIngestToken = os.Getenv("ADMIN_INGEST_TOKEN") // must match admin ADMIN_TOKEN when set
-	ingestClient     = &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // east-west, network-isolated
-		},
-	}
+	// Transport is set in main() via ingestTransport() once logging is configured:
+	// mTLS to the admin ingest listener when ADMIN_INGEST_CA is set, else legacy skip-verify.
+	ingestClient = &http.Client{Timeout: 5 * time.Second}
 	// Bound in-flight forwards so a slow/unreachable admin can't pile up goroutines
 	// and sockets during a mass deploy; excess is dropped (telemetry is best-effort).
 	ingestSem = make(chan struct{}, 64)
@@ -245,6 +241,13 @@ func newApp() *fiber.App {
 	app.Use(prom.Middleware)
 
 	api := app.Group("/api")
+	// mTLS: when a client CA is configured the listener verifies client certs
+	// (VerifyClientCertIfGiven), and /api additionally REQUIRES one — health/metrics live
+	// outside this group so certless probes still pass.
+	if os.Getenv("CLIENT_CA") != "" {
+		api.Use(requireClientCert)
+		slog.Info("CLIENT_CA set - /api requires a verified client certificate (mTLS)")
+	}
 	if token := os.Getenv("API_TOKEN"); token != "" {
 		api.Use(bearerAuth(token))
 		slog.Info("API_TOKEN set - /api requires bearer auth")
@@ -263,6 +266,9 @@ func newApp() *fiber.App {
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
+	// Configure the admin-ingest transport (mTLS when ADMIN_INGEST_CA is set).
+	ingestClient.Transport = ingestTransport()
+
 	// /api/ztp/resolve serves decrypted creds only when it can decrypt (CONFIG_KEY) and
 	// gate (POLICY_URL). Surface both so a misconfig is obvious in the logs.
 	if secretsEnabled() {
@@ -278,17 +284,10 @@ func main() {
 
 	addr := getenv("LISTEN_ADDR", ":8443")
 	cert, key := os.Getenv("TLS_CERT"), os.Getenv("TLS_KEY")
+	clientCA := os.Getenv("CLIENT_CA")
 
 	go func() {
-		var err error
-		if cert != "" && key != "" {
-			slog.Info("listening with TLS", "addr", addr)
-			err = app.ListenTLS(addr, cert, key)
-		} else {
-			slog.Warn("listening WITHOUT TLS (expecting TLS termination upstream)", "addr", addr)
-			err = app.Listen(addr)
-		}
-		if err != nil {
+		if err := serve(app, addr, cert, key, clientCA); err != nil {
 			slog.Error("listener stopped", "err", err.Error())
 			os.Exit(1)
 		}

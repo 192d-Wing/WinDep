@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO — fits the FIPS static build)
@@ -46,7 +47,89 @@ func openStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// CREATE TABLE IF NOT EXISTS never alters a table created by an older schema, so a DB
+	// from an earlier admin version can carry deploy_event schema drift — missing columns
+	// AND/OR stray NOT NULL constraints on columns that are now nullable. Either breaks
+	// ingest INSERTs with a 500. Normalize it to the canonical schema, preserving rows.
+	if err := migrateDeployEvent(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// deployEventNullable are the deploy_event columns that must be nullable in the current
+// schema; a legacy table marking any of them NOT NULL rejects ingest inserts.
+var deployEventNullable = []string{"serial", "mac", "state", "percent", "message", "model", "level"}
+
+// migrateDeployEvent normalizes a possibly-drifted deploy_event table to the canonical
+// schema. It first backfills any missing columns (idempotent ALTERs), then — if the
+// existing table still marks a should-be-nullable column NOT NULL — rebuilds the table
+// (canonical shape, rows copied) inside a transaction. deploy_event is regenerable
+// telemetry; the audit trail is a separate table and is never touched here.
+func migrateDeployEvent(db *sql.DB) error {
+	for _, col := range []string{
+		"mac TEXT", "state TEXT", "percent INTEGER", "message TEXT", "model TEXT", "level TEXT",
+	} {
+		if _, err := db.Exec(`ALTER TABLE deploy_event ADD COLUMN ` + col); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+
+	drift, err := deployEventHasNotNullDrift(db)
+	if err != nil || !drift {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	for _, stmt := range []string{
+		`CREATE TABLE deploy_event_rebuild (
+		   id INTEGER PRIMARY KEY AUTOINCREMENT,
+		   ts TEXT NOT NULL, kind TEXT NOT NULL,
+		   serial TEXT, mac TEXT, state TEXT, percent INTEGER, message TEXT, model TEXT, level TEXT
+		 )`,
+		`INSERT INTO deploy_event_rebuild(id,ts,kind,serial,mac,state,percent,message,model,level)
+		   SELECT id,ts,kind,serial,mac,state,percent,message,model,level FROM deploy_event`,
+		`DROP TABLE deploy_event`,
+		`ALTER TABLE deploy_event_rebuild RENAME TO deploy_event`,
+		`CREATE INDEX IF NOT EXISTS idx_de_serial ON deploy_event(serial)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// deployEventHasNotNullDrift reports whether any should-be-nullable column is marked
+// NOT NULL in the live deploy_event table.
+func deployEventHasNotNullDrift(db *sql.DB) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(deploy_event)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	nullable := map[string]bool{}
+	for _, c := range deployEventNullable {
+		nullable[c] = true
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if notnull == 1 && nullable[name] {
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
 }
 
 // prune caps each table to its newest maxRows, bounding growth on the fixed volume.

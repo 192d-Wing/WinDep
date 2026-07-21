@@ -120,9 +120,40 @@ ACME directory, and an **RWX** StorageClass for the shared certmagic PVC. The ce
 distributed TLS-ALPN-01 behavior (challenge served from shared storage on whichever anycast
 replica the ACME server hits) should be validated on a multi-replica cluster.
 
-> **Scope note:** in `caddyAcme` today the Caddy→backend hop is **plaintext** on the pod
-> network. Backend **mTLS** (edge→api/admin and api→admin) is a follow-up change (app-level mTLS
-> in the Go services); see the roadmap.
+> **Backend hop:** by default the Caddy→backend hop is plaintext on the pod network. Enable
+> `mtls.enabled` (below) for app-level mutual TLS on the east-west hops.
+
+---
+
+## Backend mTLS (`mtls.enabled`, requires `caddyAcme`)
+
+App-level mutual TLS on the machine-to-machine hops, so no cleartext east-west traffic:
+
+- **Caddy edge → windep-api** — api serves mTLS on :8443 (`VerifyClientCertIfGiven`; `/api`
+  requires a verified client cert, health/metrics stay open for probes/Prometheus). The Caddy
+  edge presents a client cert.
+- **windep-api → windep-admin** — admin runs a **dedicated mTLS ingest listener** on :8444
+  (`RequireAndVerifyClientCert`), exposed as the internal ClusterIP `windep-admin-ingest`. api
+  posts telemetry there with a client cert and verifies the admin server cert (the old
+  `InsecureSkipVerify` is gone). The **human admin UI is untouched** — it stays on the admin VIP
+  with no client-cert requirement, so browsers keep working.
+
+Certs are minted by a cert-manager **CA issuer** off your internal root (independent of the
+public ACME certs): `windep-api-mtls`, `windep-admin-mtls`, `windep-edge-client`.
+
+```yaml
+tls: { mode: caddyAcme }
+mtls:
+  enabled: true
+  caIssuer:
+    name: windep-internal-ca
+    kind: Issuer
+    caSecret: windep-internal-ca-key   # Secret (tls.crt+tls.key) = your internal CA
+```
+
+Prereqs: `mtls` requires `tls.mode: caddyAcme`, the internal-CA keypair Secret for the CA
+issuer, and images **windep-api ≥ 0.1.5** / **windep-admin ≥ 0.1.18** (the mTLS code). The Go
+changes are backward compatible — mTLS is inert unless these envs/certs are wired by the chart.
 
 ---
 
@@ -173,7 +204,8 @@ Notes:
 | Value | Into | Notes |
 |-------|------|-------|
 | `web.vip` / `admin.vip` | Service `io.cilium/lb-ipam-ips` annotation | anycast VIPs |
-| `networking.lbPoolCIDR` | `CiliumLoadBalancerIPPool` block | pool the VIPs draw from |
+| `web.vip6` / `admin.vip6` | adds an IPv6 VIP → `v4,v6` annotation + `ipFamilyPolicy: PreferDualStack` | optional; empty = IPv4-only |
+| `networking.lbPoolCIDR` / `lbPoolCIDR6` | `CiliumLoadBalancerIPPool` block(s) | v4 + optional v6 pool the VIPs draw from |
 | `networking.advertiseGroup` | `CiliumBGPAdvertisement` `advertise:` label | must match the cluster's peer configs, or the VIP is allocated but never advertised |
 | `networking.mode` | `bgp` → advertisement, `l2` → announcement | never both |
 | `admin.allowedCIDRs` | `windep-admin` NetworkPolicy ingress | source subnets for the RW VIP |

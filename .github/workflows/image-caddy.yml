@@ -1,0 +1,101 @@
+name: image-caddy
+
+# Build the WinDep hardened Caddy edge image (Caddy compiled from source, FIPS) on Iron
+# Bank UBI10 for amd64 + arm64 on native runners, assemble a multi-arch manifest, push to
+# GHCR. Mirrors image-admin.yml; shares REPO1_USER / REPO1 org secrets.
+
+on:
+  push:
+    tags: ["caddy-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (Caddy version, e.g. 2.8.4)"
+        required: true
+        default: "2.8.4"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/192d-wing
+  IMAGE: windep-caddy
+  TAG: ""
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Resolve image tag
+        run: |
+          RAW="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "TAG=${RAW#caddy-v}" >> "$GITHUB_ENV"
+
+      - name: Log in to Repo One (Iron Bank)
+        run: |
+          for i in $(seq 1 5); do
+            echo "${{ secrets.REPO1 }}" | buildah login -u "${{ secrets.REPO1_USER }}" --password-stdin registry1.dso.mil && exit 0
+            echo "::warning::Repo One login attempt $i failed; retrying in 15s"; sleep 15
+          done
+          echo "::error::Repo One login failed after 5 attempts"; exit 1
+
+      - name: Pre-pull base image (retry transient Iron Bank blips)
+        run: |
+          for i in $(seq 1 5); do
+            buildah pull "${{ matrix.base }}" && exit 0
+            echo "::warning::base pull attempt $i failed; retrying in 15s"; sleep 15
+          done
+          echo "::error::base pull failed after 5 attempts"; exit 1
+
+      - name: Build (${{ matrix.arch }})
+        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2
+        with:
+          image: ${{ env.IMAGE }}
+          tags: ${{ env.TAG }}-${{ matrix.arch }}
+          archs: ${{ matrix.arch }}
+          containerfiles: ./image/Containerfile.caddy
+          context: ./image
+          build-args: |
+            BASE_IMAGE=${{ matrix.base }}
+            VERSION=${{ env.TAG }}
+
+      - name: Push (${{ matrix.arch }}) to GHCR
+        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2
+        with:
+          image: ${{ env.IMAGE }}
+          tags: ${{ env.TAG }}-${{ matrix.arch }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve image tag
+        run: |
+          RAW="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "TAG=${RAW#caddy-v}" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | buildah login -u "${{ github.actor }}" --password-stdin ghcr.io
+
+      - name: Assemble and push manifest
+        run: |
+          M="${REGISTRY}/${IMAGE}:${TAG}"
+          buildah manifest create "$M"
+          buildah manifest add "$M" "docker://${REGISTRY}/${IMAGE}:${TAG}-amd64"
+          buildah manifest add "$M" "docker://${REGISTRY}/${IMAGE}:${TAG}-arm64"
+          buildah manifest push --all "$M" "docker://$M"

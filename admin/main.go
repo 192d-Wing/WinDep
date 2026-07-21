@@ -618,7 +618,17 @@ func handleConfigPut(dataDir string) fiber.Handler {
 // readBody reads the (stream-mode) request body, bounded by max so a hostile body can't
 // buffer gigabytes and OOM the pod.
 func readBody(c *fiber.Ctx, max int64) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(c.Context().RequestBodyStream(), max))
+	// StreamRequestBody (main app, for multi-GB uploads) exposes the body only via
+	// RequestBodyStream(). The ingest app runs in buffered mode (tiny JSON), where that
+	// stream is nil — fall back to the buffered body then.
+	if s := c.Context().RequestBodyStream(); s != nil {
+		return io.ReadAll(io.LimitReader(s, max))
+	}
+	b := c.Body()
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("body exceeds %d bytes", max)
+	}
+	return b, nil
 }
 
 // readJSON decodes the (stream-mode) request body into v. StreamRequestBody makes
@@ -639,6 +649,7 @@ func handleIngestStatus(st *Store) fiber.Handler {
 			return fiber.NewError(fiber.StatusBadRequest, errInvalidJSON)
 		}
 		if err := st.addStatus(r); err != nil {
+			slog.Error("ingest addStatus", "err", err.Error())
 			return fiber.NewError(fiber.StatusInternalServerError, errStore)
 		}
 		return c.SendStatus(fiber.StatusAccepted)
@@ -653,6 +664,7 @@ func handleIngestLog(st *Store) fiber.Handler {
 		}
 		for _, l := range b.Lines {
 			if err := st.addLog(b.Serial, b.Mac, l.Level, l.Message, l.Ts); err != nil {
+				slog.Error("ingest addLog", "err", err.Error())
 				return fiber.NewError(fiber.StatusInternalServerError, errStore)
 			}
 		}
@@ -677,6 +689,7 @@ func handleIngestAudit(st *Store) fiber.Handler {
 			return fiber.NewError(fiber.StatusBadRequest, errInvalidJSON)
 		}
 		if err := st.addAudit(a.Action, a.Category, a.Path, a.Source, a.Size, a.Status); err != nil {
+			slog.Error("ingest addAudit", "err", err.Error())
 			return fiber.NewError(fiber.StatusInternalServerError, errStore)
 		}
 		return c.SendStatus(fiber.StatusAccepted)
@@ -806,10 +819,12 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 	api.Get("/logs", handleLogs(st))
 	api.Get("/audit", handleAudit(st))
 	api.Get("/fleet", handleFleet(st))
-	// ingest (from windep-api, best-effort)
-	api.Post("/ingest/status", handleIngestStatus(st))
-	api.Post("/ingest/log", handleIngestLog(st))
-	api.Post("/ingest/audit", handleIngestAudit(st))
+	// ingest (from windep-api). Registered on the main /api only when there is NO
+	// dedicated mTLS ingest listener; when INGEST_ADDR is set these are served solely
+	// by newIngestApp on the mutually-authenticated port (see main()).
+	if os.Getenv("INGEST_ADDR") == "" {
+		registerIngest(api, st)
+	}
 	// file browser
 	const routeFile = "/files/:category/*"
 	api.Get("/files", handleList(dataDir))
@@ -830,6 +845,57 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 		return c.SendFile(filepath.Join(staticDir, "index.html"))
 	})
 	return app
+}
+
+// registerIngest mounts the telemetry-ingest routes (posted by windep-api) on r.
+func registerIngest(r fiber.Router, st *Store) {
+	r.Post("/ingest/status", handleIngestStatus(st))
+	r.Post("/ingest/log", handleIngestLog(st))
+	r.Post("/ingest/audit", handleIngestAudit(st))
+}
+
+// newIngestApp is the dedicated ingest surface served on the mTLS-only listener. The
+// listener requires+verifies a client cert (that IS the authentication), so no bearer
+// token or audit middleware here — just the ingest routes.
+func newIngestApp(st *Store) *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:               "windep-admin-ingest",
+		DisableStartupMessage: true,
+		// Buffered mode (NOT StreamRequestBody): ingest payloads are tiny JSON. Streaming
+		// the body over our custom mTLS tls.Listener returned a server-level 500; buffered
+		// reads (readBody falls back to c.Body()) avoid that path entirely.
+		BodyLimit: 8 * 1024 * 1024,
+	})
+	app.Use(recover.New(recover.Config{
+		EnableStackTrace: true,
+		StackTraceHandler: func(_ *fiber.Ctx, e any) {
+			slog.Error("ingest panic recovered", "err", fmt.Sprint(e))
+		},
+	}))
+	registerIngest(app.Group("/api"), st)
+	return app
+}
+
+// startIngestListener starts the dedicated mTLS ingest listener in a goroutine when
+// INGEST_ADDR is set (no-op otherwise). It requires+verifies client certs, so machine
+// ingest is mutually authenticated while the human UI listener needs no client cert.
+func startIngestListener(st *Store) {
+	iaddr := os.Getenv("INGEST_ADDR")
+	if iaddr == "" {
+		return
+	}
+	cert, key, clientCA := os.Getenv("INGEST_TLS_CERT"), os.Getenv("INGEST_TLS_KEY"), os.Getenv("INGEST_CLIENT_CA")
+	iapp := newIngestApp(st)
+	go func() {
+		slog.Info("ingest listener (mTLS)", "addr", iaddr)
+		// Fiber's native mutual-TLS server (RequireAndVerifyClientCert), matching the
+		// working main-app ListenTLS path — a hand-rolled tls.Listener + app.Listener
+		// misbehaved over the cluster's service network.
+		if err := iapp.ListenMutualTLS(iaddr, cert, key, clientCA); err != nil {
+			slog.Error("ingest listener stopped", "err", err.Error())
+			os.Exit(1)
+		}
+	}()
 }
 
 func main() {
@@ -872,6 +938,9 @@ func main() {
 	}()
 
 	app := newApp(dataDir, staticDir, st)
+
+	// Dedicated mTLS ingest listener (telemetry from windep-api), when configured.
+	startIngestListener(st)
 
 	cert, key := os.Getenv("TLS_CERT"), os.Getenv("TLS_KEY")
 	if cert != "" && key != "" {
