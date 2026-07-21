@@ -14,7 +14,7 @@
 
 images:
   admin:
-    tag: "0.1.19"
+    tag: "0.1.20"
   # api tag inherits the chart default (0.1.5)
 
 # Anycast LoadBalancer VIPs (pinned from the Cilium LB pool below).

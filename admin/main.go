@@ -639,6 +639,7 @@ func handleIngestStatus(st *Store) fiber.Handler {
 			return fiber.NewError(fiber.StatusBadRequest, errInvalidJSON)
 		}
 		if err := st.addStatus(r); err != nil {
+			slog.Error("ingest addStatus", "err", err.Error())
 			return fiber.NewError(fiber.StatusInternalServerError, errStore)
 		}
 		return c.SendStatus(fiber.StatusAccepted)
@@ -653,6 +654,7 @@ func handleIngestLog(st *Store) fiber.Handler {
 		}
 		for _, l := range b.Lines {
 			if err := st.addLog(b.Serial, b.Mac, l.Level, l.Message, l.Ts); err != nil {
+				slog.Error("ingest addLog", "err", err.Error())
 				return fiber.NewError(fiber.StatusInternalServerError, errStore)
 			}
 		}
@@ -677,6 +679,7 @@ func handleIngestAudit(st *Store) fiber.Handler {
 			return fiber.NewError(fiber.StatusBadRequest, errInvalidJSON)
 		}
 		if err := st.addAudit(a.Action, a.Category, a.Path, a.Source, a.Size, a.Status); err != nil {
+			slog.Error("ingest addAudit", "err", err.Error())
 			return fiber.NewError(fiber.StatusInternalServerError, errStore)
 		}
 		return c.SendStatus(fiber.StatusAccepted)
