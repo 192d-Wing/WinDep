@@ -43,3 +43,11 @@ imagePullSecrets:
 {{- end }}
 {{- end }}
 {{- end -}}
+
+{{/*
+lbIPs renders the io.cilium/lb-ipam-ips value: the IPv4 VIP alone, or "v4,v6" when a v6
+VIP is set (Cilium accepts a comma-separated list for dual-stack). Arg: dict "vip" .. "vip6" ..
+*/}}
+{{- define "windep.lbIPs" -}}
+{{- if .vip6 -}}{{ printf "%s,%s" .vip .vip6 }}{{- else -}}{{ .vip }}{{- end -}}
+{{- end -}}

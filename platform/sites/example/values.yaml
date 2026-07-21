@@ -64,11 +64,13 @@ mtls:
     caSecret: windep-internal-ca-key
 
 # ---- anycast VIPs (pinned from the Cilium LB pool) --------------------------
+# For dual-stack, set vip6 (and networking.lbPoolCIDR6 below); leave empty for IPv4-only.
 web:
   vip: "10.0.100.10"
-
+  # vip6: "2001:db8:100::10"
 admin:
   vip: "10.0.100.11"
+  # vip6: "2001:db8:100::11"
   # Source subnets allowed to reach the read-write admin VIP.
   allowedCIDRs:
     - "10.0.0.0/8"
@@ -86,6 +88,7 @@ storage:
 networking:
   mode: bgp
   lbPoolCIDR: "10.0.100.0/24"
+  # lbPoolCIDR6: "2001:db8:100::/64"   # set (with web/admin vip6) for dual-stack VIPs
   # Must match the label this cluster's CiliumBGPPeerConfigs export
   # (families[].advertisements.matchLabels.advertise), or the VIP is allocated but
   # never advertised.

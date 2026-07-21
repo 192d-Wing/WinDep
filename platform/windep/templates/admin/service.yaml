@@ -14,9 +14,13 @@ metadata:
     {{- include "windep.labels" (dict "ctx" $ "component" "admin") | nindent 4 }}
     windep.dev/lb-anycast: "true"
   annotations:
-    io.cilium/lb-ipam-ips: {{ .Values.admin.vip | quote }}
+    io.cilium/lb-ipam-ips: {{ include "windep.lbIPs" (dict "vip" .Values.admin.vip "vip6" .Values.admin.vip6) | quote }}
 spec:
   type: LoadBalancer
+  {{- if .Values.admin.vip6 }}
+  ipFamilyPolicy: PreferDualStack
+  ipFamilies: [IPv4, IPv6]
+  {{- end }}
   externalTrafficPolicy: Local
   selector:
     {{- include "windep.selectorLabels" (dict "ctx" $ "component" "admin") | nindent 4 }}

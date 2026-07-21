@@ -10,6 +10,9 @@ metadata:
 spec:
   blocks:
     - cidr: {{ .Values.networking.lbPoolCIDR | quote }}
+    {{- with .Values.networking.lbPoolCIDR6 }}
+    - cidr: {{ . | quote }}
+    {{- end }}
   serviceSelector:
     matchLabels:
       windep.dev/lb-anycast: "true"

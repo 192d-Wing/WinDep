@@ -86,6 +86,7 @@ api:
 web:
   replicas: 2
   vip: "10.0.100.10"                 # LoadBalancer VIP (anycast) — overridden per site
+  vip6: ""                           # optional IPv6 VIP → dual-stack (empty = IPv4-only)
   pdb:
     enabled: true
     minAvailable: 1
@@ -97,6 +98,7 @@ web:
 admin:
   replicas: 1                        # sole RW writer; strategy is Recreate
   vip: "10.0.100.11"                 # separate admin LoadBalancer VIP
+  vip6: ""                           # optional IPv6 admin VIP → dual-stack
   gomemlimit: "460MiB"               # bound Go heap under the 1Gi cap during multi-GB uploads
   # NetworkPolicy ingress allow-list for the RW admin VIP (source subnets). The api->admin
   # ingest rule is always added on top of this.
@@ -125,6 +127,7 @@ networking:
   # l2  = CiliumL2AnnouncementPolicy (single-node ARP, NOT anycast) — flat-L2 fallback.
   mode: bgp
   lbPoolCIDR: "10.0.100.0/24"        # CiliumLoadBalancerIPPool block the VIPs draw from
+  lbPoolCIDR6: ""                    # optional IPv6 CIDR block → dual-stack VIPs (empty = v4-only)
   advertiseGroup: "windep-anycast"   # label the cluster's BGP peer configs export (bgp mode)
 
 # ---- TLS mode ---------------------------------------------------------------

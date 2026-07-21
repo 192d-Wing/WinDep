@@ -204,7 +204,8 @@ Notes:
 | Value | Into | Notes |
 |-------|------|-------|
 | `web.vip` / `admin.vip` | Service `io.cilium/lb-ipam-ips` annotation | anycast VIPs |
-| `networking.lbPoolCIDR` | `CiliumLoadBalancerIPPool` block | pool the VIPs draw from |
+| `web.vip6` / `admin.vip6` | adds an IPv6 VIP → `v4,v6` annotation + `ipFamilyPolicy: PreferDualStack` | optional; empty = IPv4-only |
+| `networking.lbPoolCIDR` / `lbPoolCIDR6` | `CiliumLoadBalancerIPPool` block(s) | v4 + optional v6 pool the VIPs draw from |
 | `networking.advertiseGroup` | `CiliumBGPAdvertisement` `advertise:` label | must match the cluster's peer configs, or the VIP is allocated but never advertised |
 | `networking.mode` | `bgp` → advertisement, `l2` → announcement | never both |
 | `admin.allowedCIDRs` | `windep-admin` NetworkPolicy ingress | source subnets for the RW VIP |
