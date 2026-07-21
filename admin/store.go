@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO — fits the FIPS static build)
@@ -46,7 +47,35 @@ func openStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// CREATE TABLE IF NOT EXISTS does NOT alter a table created by an older schema, so a
+	// DB from an earlier admin version can be missing columns the current inserts use
+	// (e.g. deploy_event.mac) — which fails ingest writes with a 500. Backfill any
+	// missing nullable columns idempotently.
+	if err := ensureColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// ensureColumns adds columns that older deploy_event tables may lack. Each ALTER is
+// idempotent: a "duplicate column name" error just means it already exists. Only
+// nullable columns are added (NOT NULL requires a default and is always present in the
+// base schema).
+func ensureColumns(db *sql.DB) error {
+	for _, alter := range []string{
+		`ALTER TABLE deploy_event ADD COLUMN mac TEXT`,
+		`ALTER TABLE deploy_event ADD COLUMN state TEXT`,
+		`ALTER TABLE deploy_event ADD COLUMN percent INTEGER`,
+		`ALTER TABLE deploy_event ADD COLUMN message TEXT`,
+		`ALTER TABLE deploy_event ADD COLUMN model TEXT`,
+		`ALTER TABLE deploy_event ADD COLUMN level TEXT`,
+	} {
+		if _, err := db.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 // prune caps each table to its newest maxRows, bounding growth on the fixed volume.

@@ -24,7 +24,7 @@ images:
     pullPolicy: IfNotPresent
   admin:
     repo: ghcr.io/192d-wing/windep-admin
-    tag: "0.1.18"  # 0.1.18 adds the dedicated mTLS ingest listener (backward compatible)
+    tag: "0.1.19"  # 0.1.19: mTLS ingest listener + deploy_event schema backfill migration
     pullPolicy: IfNotPresent
   nginx:
     # Iron Bank hardened nginx (registry1.dso.mil / Repo One — needs the pull secret
@@ -35,9 +35,9 @@ images:
     pullPolicy: IfNotPresent
   caddy:
     # Edge TLS terminator for tls.mode=caddyAcme (ACME TLS-ALPN-01 via certmagic).
-    # Prefer an Iron Bank Caddy for ATO parity — VERIFY availability in Repo One and
-    # pin the tag. Falls back to the public image if your policy allows it.
-    repo: registry1.dso.mil/ironbank/opensource/caddy/caddy
+    # WinDep's hardened Caddy — Caddy compiled from source (FIPS) on Iron Bank UBI,
+    # built by .github/workflows/image-caddy.yml. (Iron Bank ships no Caddy of its own.)
+    repo: ghcr.io/192d-wing/windep-caddy
     tag: "2.8.4"
     pullPolicy: IfNotPresent
 
