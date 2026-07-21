@@ -1,0 +1,56 @@
+# =============================================================================
+# Full-Kubernetes site values (mirrors the former platform/overlays/example).
+# Cilium as CNI with the BGP control plane enabled.
+#
+#   helm install windep platform/windep -n windep --create-namespace \
+#     -f platform/windep/values-example.yaml
+# =============================================================================
+
+images:
+  admin:
+    tag: "0.1.17"
+  # api tag inherits the chart default (0.1.4)
+
+web:
+  vip: "10.0.100.10"
+
+admin:
+  vip: "10.0.100.11"
+  # Widen/narrow to the real admin range(s) for this site.
+  allowedCIDRs:
+    - "10.0.0.0/8"
+
+storage:
+  webRoot:
+    # Needs a ReadWriteMany StorageClass.
+    storageClass: "nfs-client"
+    size: "20Gi"
+  adminDb:
+    storageClass: "longhorn"
+
+networking:
+  mode: bgp
+  lbPoolCIDR: "10.0.100.0/24"
+  advertiseGroup: "windep-anycast"
+
+certManager:
+  enabled: true
+  issuer:
+    acme:
+      # << set to this site's internal ACME directory >>
+      server: "https://ca.internal.example/acme/acme/directory"
+      email: "pki@example.internal"
+      solvers:
+        - dns01:
+            rfc2136:
+              nameserver: "10.0.0.53:53"
+              tsigKeyName: "windep-acme"
+              tsigAlgorithm: HMACSHA256
+              tsigSecretSecretRef:
+                name: windep-acme-tsig
+                key: tsig-secret-key
+  certificates:
+    dnsNames:
+      api:   ["windep-api.internal.example"]
+      web:   ["deploy.internal.example"]
+      admin: ["admin.deploy.internal.example"]

@@ -1,0 +1,20 @@
+# ClusterIP: windep-api is fronted by the windep-web nginx (which owns the shared
+# anycast VIP and proxies /api/* here). Stateless, so the Service load-balances across
+# replicas. To give the API its own external VIP, switch type to LoadBalancer and add
+# the windep.dev/lb-anycast label + io.cilium/lb-ipam-ips annotation.
+apiVersion: v1
+kind: Service
+metadata:
+  name: windep-api
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "windep.selectorLabels" (dict "ctx" $ "component" "api") | nindent 4 }}
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP

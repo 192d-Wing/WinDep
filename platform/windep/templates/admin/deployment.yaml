@@ -1,0 +1,102 @@
+# WinDep admin — the ONLY read-write path to the deploy PV (Cloudscape UI + file API).
+# Single replica: it's the sole writer, low-traffic, admin-only. The client nginx mounts
+# the same PVC read-only; this one mounts it RW.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: windep-admin
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "admin") | nindent 4 }}
+spec:
+  replicas: {{ .Values.admin.replicas }}
+  strategy:
+    type: Recreate # single RW writer — don't run two during rollout
+  selector:
+    matchLabels:
+      {{- include "windep.selectorLabels" (dict "ctx" $ "component" "admin") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "windep.selectorLabels" (dict "ctx" $ "component" "admin") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false # never calls the k8s API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001 # own the PV files so writes succeed
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admin
+          image: "{{ .Values.images.admin.repo }}:{{ .Values.images.admin.tag }}"
+          imagePullPolicy: {{ .Values.images.admin.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: DATA_DIR
+              value: /srv/windep
+            - name: TLS_CERT
+              value: /tls/tls.crt
+            - name: TLS_KEY
+              value: /tls/tls.key
+            # Optional bearer token; NetworkPolicy is the primary control.
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.adminAuth }}
+                  key: token
+                  optional: true
+            # Base64 32-byte AES key that encrypts secret config fields at rest on the PV.
+            # MUST equal the key baked into boot.wim. Optional: unset = creds stored plaintext.
+            - name: CONFIG_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.configKey }}
+                  key: key
+                  optional: true
+            # GOMEMLIMIT makes the Go runtime GC aggressively near the cap so a long
+            # multi-GB upload can't overshoot the cgroup limit and OOMKill mid-transfer.
+            - name: GOMEMLIMIT
+              value: {{ .Values.admin.gomemlimit | quote }}
+            - name: DB_PATH
+              value: /data/windep.db # SQLite: deployment telemetry + audit trail
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.admin.resources | nindent 12 }}
+          volumeMounts:
+            - name: web-root
+              mountPath: /srv/windep # RW: uploads/deletes land here
+            - name: db
+              mountPath: /data # SQLite datastore (RWO)
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: web-root
+          persistentVolumeClaim:
+            claimName: windep-web-root
+        - name: db
+          persistentVolumeClaim:
+            claimName: windep-admin-db
+        - name: tls
+          secret:
+            # Serving cert for the admin VIP, internal CA.
+            secretName: {{ .Values.secrets.adminTls }}
+        - name: tmp
+          emptyDir: {}

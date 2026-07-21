@@ -1,6 +1,6 @@
 module github.com/192d-Wing/WinDep/admin
 
-go 1.25.11
+go 1.26.5
 
 require (
 	github.com/gofiber/fiber/v2 v2.52.13

@@ -1,0 +1,9 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "windep.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: windep
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}

@@ -1,0 +1,27 @@
+{{- if eq .Values.networking.mode "bgp" }}
+# Anycast advertisement via Cilium BGPv2.
+#
+# BGP PEERING is cluster-owned: a cluster-wide CiliumBGPClusterConfig peers upstream and its
+# CiliumBGPPeerConfigs export every CiliumBGPAdvertisement carrying the label
+# `advertise: <advertiseGroup>`. WinDep must NOT create its own CiliumBGPClusterConfig
+# (that conflicts) — it contributes exactly this ONE advertisement, selecting the
+# windep.dev/lb-anycast Services' LoadBalancer VIPs. Each VIP is advertised as a /32 from
+# every node the cluster config matches -> ECMP/anycast.
+apiVersion: cilium.io/v2
+kind: CiliumBGPAdvertisement
+metadata:
+  name: windep-anycast
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "cilium") | nindent 4 }}
+    # REQUIRED: the cluster's peer configs only export ads with this label.
+    advertise: {{ .Values.networking.advertiseGroup | quote }}
+spec:
+  advertisements:
+    - advertisementType: Service
+      service:
+        addresses:
+          - LoadBalancerIP
+      selector:
+        matchLabels:
+          windep.dev/lb-anycast: "true" # advertise both the deploy + admin VIPs
+{{- end }}

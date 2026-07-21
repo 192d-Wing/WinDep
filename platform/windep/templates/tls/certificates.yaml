@@ -1,0 +1,37 @@
+{{- if .Values.certManager.enabled }}
+{{- $iss := .Values.certManager.issuer }}
+{{- $cm := .Values.certManager.certificates }}
+{{- $svcs := list
+      (dict "component" "api"   "secret" .Values.secrets.apiTls   "dnsNames" $cm.dnsNames.api)
+      (dict "component" "web"   "secret" .Values.secrets.webTls   "dnsNames" $cm.dnsNames.web)
+      (dict "component" "admin" "secret" .Values.secrets.adminTls "dnsNames" $cm.dnsNames.admin) }}
+{{- range $svcs }}
+---
+# cert-manager Certificate -> writes {{ .secret }}, mounted by windep-{{ .component }}.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: windep-{{ .component }}-tls
+  namespace: {{ include "windep.namespace" $ }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" .component) | nindent 4 }}
+spec:
+  secretName: {{ .secret }}
+  duration: {{ $cm.duration }}
+  renewBefore: {{ $cm.renewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  dnsNames:
+    {{- toYaml .dnsNames | nindent 4 }}
+  issuerRef:
+    name: {{ $iss.name }}
+    kind: {{ $iss.kind }}
+    group: cert-manager.io
+{{- end }}
+{{- end }}

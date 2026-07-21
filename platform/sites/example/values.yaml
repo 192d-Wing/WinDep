@@ -1,0 +1,75 @@
+# =============================================================================
+# Site: example  (full-Kubernetes cluster, Cilium CNI + BGP control plane)
+#
+# A per-site values overlay. Helm merges this over the chart defaults
+# (platform/windep/values.yaml), so it holds only this site's overrides. Copy this
+# directory to platform/sites/<your-site>/ and edit the VIPs, StorageClass,
+# admin.allowedCIDRs, image tags, and the certManager.issuer.acme block.
+#
+#   helm install windep platform/windep -n windep --create-namespace \
+#     -f platform/sites/example/values.yaml
+#   helm upgrade windep platform/windep -n windep \
+#     -f platform/sites/example/values.yaml
+# =============================================================================
+
+images:
+  admin:
+    tag: "0.1.17"
+  # api tag inherits the chart default (0.1.4)
+
+# Anycast LoadBalancer VIPs (pinned from the Cilium LB pool below).
+web:
+  vip: "10.0.100.10"
+
+admin:
+  vip: "10.0.100.11"
+  # Source subnets allowed to reach the read-write admin VIP. Widen/narrow to the
+  # real admin range(s) for this site.
+  allowedCIDRs:
+    - "10.0.0.0/8"
+
+storage:
+  webRoot:
+    # Payload PV (config/, images/*.wim, boot/). Needs a ReadWriteMany StorageClass.
+    storageClass: "nfs-client"
+    size: "20Gi"
+  adminDb:
+    storageClass: "longhorn"
+
+networking:
+  # bgp = anycast/ECMP (peering is cluster-owned). l2 = single-node ARP fallback.
+  mode: bgp
+  lbPoolCIDR: "10.0.100.0/24"
+  # Must match the label this cluster's CiliumBGPPeerConfigs export
+  # (families[].advertisements.matchLabels.advertise), or the VIP is allocated but
+  # never advertised.
+  advertiseGroup: "windep-anycast"
+
+certManager:
+  enabled: true
+  issuer:
+    kind: Issuer
+    name: windep-acme
+    acme:
+      # << set to THIS site's INTERNAL ACME directory (step-ca / smallstep, etc.) >>
+      # Must be the internal CA whose root is baked into boot.wim — a public Let's
+      # Encrypt cert would fail WinPE's HTTPS validation.
+      server: "https://ca.internal.example/acme/acme/directory"
+      email: "pki@example.internal"
+      privateKeySecretRef: windep-acme-account-key
+      # Replace with this site's internal DNS-01 provider/webhook (cert-manager
+      # supports dns01/http01 only — not tls-alpn-01). rfc2136 stub shown.
+      solvers:
+        - dns01:
+            rfc2136:
+              nameserver: "10.0.0.53:53"
+              tsigKeyName: "windep-acme"
+              tsigAlgorithm: HMACSHA256
+              tsigSecretSecretRef:
+                name: windep-acme-tsig
+                key: tsig-secret-key
+  certificates:
+    dnsNames:
+      api:   ["windep-api.internal.example"]
+      web:   ["deploy.internal.example"]
+      admin: ["admin.deploy.internal.example"]

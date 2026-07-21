@@ -1,0 +1,14 @@
+{{- if .Values.api.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: windep-api
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.api.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "windep.selectorLabels" (dict "ctx" $ "component" "api") | nindent 6 }}
+{{- end }}

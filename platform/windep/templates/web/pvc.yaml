@@ -1,0 +1,20 @@
+# PersistentVolumeClaim for the deploy web root (config/ + images/ + boot/).
+#
+# RWX so every windep-web replica (spread across nodes for anycast HA) and windep-api
+# (read-only) mount the SAME content, while windep-admin mounts it read-write. Requires a
+# ReadWriteMany StorageClass (NFS, Longhorn share-manager, CephFS...). local-path (k3s
+# default) is RWO and will NOT bind this claim.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: windep-web-root
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.storage.webRoot.accessMode }}
+  storageClassName: {{ .Values.storage.webRoot.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.webRoot.size | quote }}
