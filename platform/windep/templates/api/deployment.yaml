@@ -1,8 +1,14 @@
+{{- $ns := include "windep.namespace" . }}
+{{- $mtls := .Values.mtls.enabled }}
+{{- /* api serves its own TLS in certManager mode, or whenever backend mTLS is on
+       (caddyAcme+mtls). Only caddyAcme WITHOUT mtls runs api plaintext behind Caddy. */}}
+{{- $apiTLS := or (eq .Values.tls.mode "certManager") $mtls }}
+{{- $scheme := ternary "HTTPS" "HTTP" $apiTLS }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: windep-api
-  namespace: {{ include "windep.namespace" . }}
+  namespace: {{ $ns }}
   labels:
     {{- include "windep.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
 spec:
@@ -43,18 +49,35 @@ spec:
           env:
             - name: LISTEN_ADDR
               value: ":8443"
-            {{- if ne .Values.tls.mode "caddyAcme" }}
-            # certManager mode: api terminates its own TLS. In caddyAcme mode api runs
-            # PLAINTEXT behind the Caddy edge (which reverse-proxies /api here).
+            {{- if $apiTLS }}
+            # api terminates TLS (certManager mode, or mTLS server for the Caddy edge).
+            # Plaintext only in caddyAcme WITHOUT mtls (Caddy proxies /api here).
             - name: TLS_CERT
               value: "/tls/tls.crt"
             - name: TLS_KEY
               value: "/tls/tls.key"
             {{- end }}
-            # Best-effort forward of deployment telemetry to the admin datastore
-            # (logs/audit review). Unset = feature off; failures never affect WinPE.
+            {{- if $mtls }}
+            # mTLS: verify the Caddy edge's client cert on /api (health/metrics stay open).
+            - name: CLIENT_CA
+              value: "/tls/ca.crt"
+            {{- end }}
+            # Best-effort forward of deployment telemetry to the admin datastore.
             - name: ADMIN_INGEST_URL
+            {{- if $mtls }}
+              value: "https://windep-admin-ingest.{{ $ns }}.svc.cluster.local:8444/api"
+            {{- else }}
               value: {{ .Values.api.adminIngestUrl | quote }}
+            {{- end }}
+            {{- if $mtls }}
+            # Present a client cert to the admin mTLS ingest listener and verify its server cert.
+            - name: ADMIN_INGEST_CLIENT_CERT
+              value: "/tls/tls.crt"
+            - name: ADMIN_INGEST_CLIENT_KEY
+              value: "/tls/tls.key"
+            - name: ADMIN_INGEST_CA
+              value: "/tls/ca.crt"
+            {{- end }}
             # Must match the admin's ADMIN_TOKEN when set, or ingest gets 401.
             - name: ADMIN_INGEST_TOKEN
               valueFrom:
@@ -84,14 +107,14 @@ spec:
             httpGet:
               path: /readyz
               port: 8443
-              scheme: HTTPS
+              scheme: {{ $scheme }}
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8443
-              scheme: HTTPS
+              scheme: {{ $scheme }}
             initialDelaySeconds: 5
             periodSeconds: 10
           securityContext:
@@ -100,7 +123,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            {{- if ne .Values.tls.mode "caddyAcme" }}
+            {{- if $apiTLS }}
             - name: tls
               mountPath: /tls
               readOnly: true
@@ -110,11 +133,12 @@ spec:
               mountPath: /srv/windep
               readOnly: true
       volumes:
-        {{- if ne .Values.tls.mode "caddyAcme" }}
+        {{- if $apiTLS }}
         - name: tls
           secret:
-            # TLS cert chaining to the internal CA that WinPE trusts.
-            secretName: {{ .Values.secrets.apiTls }}
+            # mtls: cert-manager CA-issued keypair (+ ca.crt) for the api mTLS identity.
+            # else: internal-CA serving cert (secrets.apiTls).
+            secretName: {{ if $mtls }}windep-api-mtls{{ else }}{{ .Values.secrets.apiTls }}{{ end }}
         {{- end }}
         - name: web-root
           persistentVolumeClaim:

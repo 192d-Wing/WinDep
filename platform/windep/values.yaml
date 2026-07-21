@@ -20,11 +20,11 @@ namespace:
 images:
   api:
     repo: ghcr.io/192d-wing/windep-api
-    tag: "0.1.4"
+    tag: "0.1.5"   # 0.1.5 adds app-level mTLS (backward compatible; mTLS off unless configured)
     pullPolicy: IfNotPresent
   admin:
     repo: ghcr.io/192d-wing/windep-admin
-    tag: "0.1.17"
+    tag: "0.1.18"  # 0.1.18 adds the dedicated mTLS ingest listener (backward compatible)
     pullPolicy: IfNotPresent
   nginx:
     # Iron Bank hardened nginx (registry1.dso.mil / Repo One — needs the pull secret
@@ -162,6 +162,27 @@ caddyAcme:
   hosts:
     web:   ["deploy.example.internal", "windep-api.example.internal"]
     admin: ["admin.deploy.example.internal"]
+
+# ---- backend mTLS (east-west) -----------------------------------------------
+# App-level mutual TLS on the machine-to-machine hops: Caddy edge → windep-api, and
+# windep-api → windep-admin ingest. Requires tls.mode=caddyAcme. Certs are minted by a
+# cert-manager CA issuer off your internal root (independent of the public ACME certs).
+#
+#   - windep-api serves mTLS on :8443 (VerifyClientCertIfGiven; /api requires a verified
+#     client cert — health/metrics stay open). The Caddy edge presents a client cert.
+#   - windep-admin runs a DEDICATED mTLS ingest listener on :8444 (RequireAndVerify) for
+#     windep-api telemetry, exposed as the ClusterIP Service windep-admin-ingest. The
+#     human UI listener is unchanged (no client cert), so browsers keep working.
+mtls:
+  enabled: false
+  # cert-manager CA issuer (kind: CA), backed by a Secret holding the internal CA
+  # keypair (tls.crt + tls.key). cert-manager mints server/client leaf certs off it.
+  caIssuer:
+    name: windep-internal-ca
+    kind: Issuer                    # Issuer (namespaced) | ClusterIssuer
+    caSecret: windep-internal-ca-key  # Secret (tls.crt+tls.key) = the internal CA
+  duration: 720h                    # 30d leaf certs
+  renewBefore: 120h                 # 5d
 
 # ---- cert-manager ACME TLS --------------------------------------------------
 # When enabled the chart renders a namespaced ACME Issuer + a Certificate per service,

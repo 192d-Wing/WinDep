@@ -1,0 +1,89 @@
+{{- if .Values.mtls.enabled }}
+{{- $ns := include "windep.namespace" . }}
+{{- $ca := .Values.mtls.caIssuer }}
+# Backend mTLS certs (east-west). A cert-manager CA issuer off the internal root mints:
+#   windep-api-mtls    — api server + client identity (server auth + client auth)
+#   windep-admin-mtls  — admin ingest listener server cert (server auth)
+#   windep-edge-client — Caddy edge client cert to windep-api (client auth)
+# Each secret carries ca.crt, which the apps use as the trust root (CLIENT_CA / RootCAs).
+apiVersion: cert-manager.io/v1
+kind: {{ $ca.kind }}
+metadata:
+  name: {{ $ca.name }}
+  {{- if eq $ca.kind "Issuer" }}
+  namespace: {{ $ns }}
+  {{- end }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "mtls") | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ $ca.caSecret }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: windep-api-mtls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
+spec:
+  secretName: windep-api-mtls
+  duration: {{ .Values.mtls.duration }}
+  renewBefore: {{ .Values.mtls.renewBefore }}
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+  usages: ["server auth", "client auth"]  # server (Caddy→api) + client (api→admin ingest)
+  commonName: windep-api
+  dnsNames:
+    - windep-api
+    - windep-api.{{ $ns }}
+    - windep-api.{{ $ns }}.svc
+    - windep-api.{{ $ns }}.svc.cluster.local
+  issuerRef:
+    name: {{ $ca.name }}
+    kind: {{ $ca.kind }}
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: windep-admin-mtls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "admin") | nindent 4 }}
+spec:
+  secretName: windep-admin-mtls
+  duration: {{ .Values.mtls.duration }}
+  renewBefore: {{ .Values.mtls.renewBefore }}
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+  usages: ["server auth"]
+  commonName: windep-admin-ingest
+  dnsNames:
+    - windep-admin-ingest
+    - windep-admin-ingest.{{ $ns }}
+    - windep-admin-ingest.{{ $ns }}.svc
+    - windep-admin-ingest.{{ $ns }}.svc.cluster.local
+  issuerRef:
+    name: {{ $ca.name }}
+    kind: {{ $ca.kind }}
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: windep-edge-client
+  namespace: {{ $ns }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+spec:
+  secretName: windep-edge-client
+  duration: {{ .Values.mtls.duration }}
+  renewBefore: {{ .Values.mtls.renewBefore }}
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+  usages: ["client auth"]
+  commonName: windep-edge
+  dnsNames: ["windep-edge"]
+  issuerRef:
+    name: {{ $ca.name }}
+    kind: {{ $ca.kind }}
+    group: cert-manager.io
+{{- end }}

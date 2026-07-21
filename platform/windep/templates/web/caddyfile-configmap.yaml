@@ -29,8 +29,19 @@ data:
       root * /srv/windep
       @api path /api/*
       handle @api {
-        # windep-api runs PLAINTEXT in caddyAcme mode (Service 443 -> targetPort 8443).
+      {{- if .Values.mtls.enabled }}
+        # mTLS to windep-api: present the edge client cert and verify the api server cert.
+        reverse_proxy https://windep-api.{{ include "windep.namespace" . }}.svc.cluster.local:443 {
+          transport http {
+            tls
+            tls_client_auth /etc/caddy/client/tls.crt /etc/caddy/client/tls.key
+            tls_trusted_ca_certs /etc/caddy/client/ca.crt
+          }
+        }
+      {{- else }}
+        # windep-api runs PLAINTEXT behind the edge (Service 443 -> targetPort 8443).
         reverse_proxy windep-api.{{ include "windep.namespace" . }}.svc.cluster.local:443
+      {{- end }}
       }
       handle {
         # Static payload: config JSON, WIMs (large; stream), boot files. Caddy defaults

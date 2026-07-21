@@ -6,6 +6,7 @@
 # tls.mode=caddyAcme:   admin serves PLAINTEXT on :8080; a Caddy sidecar terminates public
 #                       TLS (ACME TLS-ALPN-01) on :8443 and proxies to it on localhost.
 {{- $caddy := eq .Values.tls.mode "caddyAcme" }}
+{{- $mtls := .Values.mtls.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,6 +49,10 @@ spec:
             - name: https
               containerPort: 8443
             {{- end }}
+            {{- if $mtls }}
+            - name: ingest
+              containerPort: 8444
+            {{- end }}
           env:
             - name: DATA_DIR
               value: /srv/windep
@@ -82,6 +87,18 @@ spec:
               value: {{ .Values.admin.gomemlimit | quote }}
             - name: DB_PATH
               value: /data/windep.db # SQLite: deployment telemetry + audit trail
+            {{- if $mtls }}
+            # Dedicated mTLS ingest listener for windep-api telemetry (separate from the
+            # human UI listener, which needs no client cert).
+            - name: INGEST_ADDR
+              value: ":8444"
+            - name: INGEST_TLS_CERT
+              value: "/mtls/tls.crt"
+            - name: INGEST_TLS_KEY
+              value: "/mtls/tls.key"
+            - name: INGEST_CLIENT_CA
+              value: "/mtls/ca.crt"
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -116,6 +133,11 @@ spec:
             {{- if not $caddy }}
             - name: tls
               mountPath: /tls
+              readOnly: true
+            {{- end }}
+            {{- if $mtls }}
+            - name: mtls
+              mountPath: /mtls
               readOnly: true
             {{- end }}
             - name: tmp
@@ -186,6 +208,12 @@ spec:
           secret:
             # Serving cert for the admin VIP, internal CA.
             secretName: {{ .Values.secrets.adminTls }}
+        {{- end }}
+        {{- if $mtls }}
+        - name: mtls
+          secret:
+            # cert-manager CA-issued server cert (+ ca.crt) for the mTLS ingest listener.
+            secretName: windep-admin-mtls
         {{- end }}
         - name: tmp
           emptyDir: {}

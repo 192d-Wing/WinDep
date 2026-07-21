@@ -806,10 +806,12 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 	api.Get("/logs", handleLogs(st))
 	api.Get("/audit", handleAudit(st))
 	api.Get("/fleet", handleFleet(st))
-	// ingest (from windep-api, best-effort)
-	api.Post("/ingest/status", handleIngestStatus(st))
-	api.Post("/ingest/log", handleIngestLog(st))
-	api.Post("/ingest/audit", handleIngestAudit(st))
+	// ingest (from windep-api). Registered on the main /api only when there is NO
+	// dedicated mTLS ingest listener; when INGEST_ADDR is set these are served solely
+	// by newIngestApp on the mutually-authenticated port (see main()).
+	if os.Getenv("INGEST_ADDR") == "" {
+		registerIngest(api, st)
+	}
 	// file browser
 	const routeFile = "/files/:category/*"
 	api.Get("/files", handleList(dataDir))
@@ -830,6 +832,55 @@ func newApp(dataDir, staticDir string, st *Store) *fiber.App {
 		return c.SendFile(filepath.Join(staticDir, "index.html"))
 	})
 	return app
+}
+
+// registerIngest mounts the telemetry-ingest routes (posted by windep-api) on r.
+func registerIngest(r fiber.Router, st *Store) {
+	r.Post("/ingest/status", handleIngestStatus(st))
+	r.Post("/ingest/log", handleIngestLog(st))
+	r.Post("/ingest/audit", handleIngestAudit(st))
+}
+
+// newIngestApp is the dedicated ingest surface served on the mTLS-only listener. The
+// listener requires+verifies a client cert (that IS the authentication), so no bearer
+// token or audit middleware here — just the ingest routes.
+func newIngestApp(st *Store) *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:               "windep-admin-ingest",
+		DisableStartupMessage: true,
+		BodyLimit:             8 * 1024 * 1024,
+	})
+	app.Use(recover.New())
+	registerIngest(app.Group("/api"), st)
+	return app
+}
+
+// startIngestListener starts the dedicated mTLS ingest listener in a goroutine when
+// INGEST_ADDR is set (no-op otherwise). It requires+verifies client certs, so machine
+// ingest is mutually authenticated while the human UI listener needs no client cert.
+func startIngestListener(st *Store) {
+	iaddr := os.Getenv("INGEST_ADDR")
+	if iaddr == "" {
+		return
+	}
+	cfg, err := serverTLSConfig(os.Getenv("INGEST_TLS_CERT"), os.Getenv("INGEST_TLS_KEY"), os.Getenv("INGEST_CLIENT_CA"), true)
+	if err != nil {
+		slog.Error("ingest tls config", "err", err.Error())
+		os.Exit(1)
+	}
+	ln, err := tlsListener(iaddr, cfg)
+	if err != nil {
+		slog.Error("ingest listen", "err", err.Error())
+		os.Exit(1)
+	}
+	iapp := newIngestApp(st)
+	go func() {
+		slog.Info("ingest listener (mTLS)", "addr", iaddr)
+		if err := iapp.Listener(ln); err != nil {
+			slog.Error("ingest listener stopped", "err", err.Error())
+			os.Exit(1)
+		}
+	}()
 }
 
 func main() {
@@ -872,6 +923,9 @@ func main() {
 	}()
 
 	app := newApp(dataDir, staticDir, st)
+
+	// Dedicated mTLS ingest listener (telemetry from windep-api), when configured.
+	startIngestListener(st)
 
 	cert, key := os.Getenv("TLS_CERT"), os.Getenv("TLS_KEY")
 	if cert != "" && key != "" {

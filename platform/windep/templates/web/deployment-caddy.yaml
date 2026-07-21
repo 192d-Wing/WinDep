@@ -70,6 +70,11 @@ spec:
             - name: ca-root
               mountPath: /etc/caddy/ca
               readOnly: true
+            {{- if .Values.mtls.enabled }}
+            - name: edge-client
+              mountPath: /etc/caddy/client
+              readOnly: true
+            {{- end }}
             - name: acme
               mountPath: /data
             - name: tmp
@@ -84,6 +89,12 @@ spec:
         - name: ca-root
           secret:
             secretName: {{ .Values.caddyAcme.caRootSecret }}
+        {{- if .Values.mtls.enabled }}
+        - name: edge-client
+          secret:
+            # cert-manager CA-issued client cert (+ ca.crt) for the edge → windep-api mTLS.
+            secretName: windep-edge-client
+        {{- end }}
         - name: acme
           persistentVolumeClaim:
             claimName: windep-caddy-acme
