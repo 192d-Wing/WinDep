@@ -10,7 +10,7 @@
 #     -t ghcr.io/192d-wing/windep-admin:0.1.1-amd64 admin
 
 ARG NODE_IMAGE=docker.io/library/node:20-alpine
-ARG BUILDER_IMAGE=docker.io/library/golang:1.25-alpine
+ARG BUILDER_IMAGE=docker.io/library/golang:1.26.5-alpine
 ARG BASE_IMAGE=registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2
 ARG GOFIPS140=v1.0.0
 
