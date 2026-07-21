@@ -851,7 +851,11 @@ func newIngestApp(st *Store) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:               "windep-admin-ingest",
 		DisableStartupMessage: true,
-		BodyLimit:             8 * 1024 * 1024,
+		// readBody reads c.Context().RequestBodyStream(), which only works with
+		// StreamRequestBody — without it RequestBodyStream() is nil and readBody panics
+		// (caught by recover as a bare 500). Must match the main app.
+		StreamRequestBody: true,
+		BodyLimit:         8 * 1024 * 1024,
 	})
 	app.Use(recover.New())
 	registerIngest(app.Group("/api"), st)

@@ -2,9 +2,39 @@ package main
 
 import (
 	"database/sql"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/gofiber/fiber/v2"
 )
+
+// TestIngestAppAcceptsStatus drives newIngestApp end-to-end (readBody uses
+// RequestBodyStream, which panics unless the app sets StreamRequestBody) and asserts a
+// status POST is Accepted, not a bare 500.
+func TestIngestAppAcceptsStatus(t *testing.T) {
+	st, err := openStore(filepath.Join(t.TempDir(), "ingest.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.close()
+	app := newIngestApp(st)
+	for _, tc := range []struct{ path, body string }{
+		{"/api/ingest/status", `{"serial":"T-1","state":"success","percent":100}`},
+		{"/api/ingest/log", `{"serial":"T-2","lines":[{"ts":"t","level":"info","message":"hi"}]}`},
+	} {
+		req := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req, -1)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.path, err)
+		}
+		if resp.StatusCode != fiber.StatusAccepted {
+			t.Fatalf("%s: got %d, want %d", tc.path, resp.StatusCode, fiber.StatusAccepted)
+		}
+	}
+}
 
 // TestMigrateDeployEventNotNullDrift reproduces a legacy deploy_event table with stray
 // NOT NULL constraints on columns that are nullable in the current schema (the drift
