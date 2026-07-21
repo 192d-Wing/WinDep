@@ -1,0 +1,21 @@
+{{- if eq .Values.tls.mode "caddyAcme" }}
+# certmagic storage for the Caddy deploy edge (ACME account + issued certs + in-flight
+# TLS-ALPN-01 challenges). RWX so every windep-web replica shares it — this is what makes
+# TLS-ALPN-01 HA-safe behind the anycast VIP: whichever replica the challenge lands on
+# reads the pending challenge from shared storage. Kept SEPARATE from the payload PV so it
+# is never web-served. Small — certs + account keys only.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: windep-caddy-acme
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.caddyAcme.storage.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.caddyAcme.storage.size | quote }}
+{{- end }}

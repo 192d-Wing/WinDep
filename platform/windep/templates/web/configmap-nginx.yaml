@@ -1,4 +1,5 @@
-# nginx config for the WinDep deploy web server.
+{{- if eq .Values.tls.mode "certManager" }}
+# nginx config for the WinDep deploy web server (tls.mode=certManager).
 #
 # Serves the static payload tree from the PV (config/, images/*.wim, boot/) over TLS
 # (internal-CA cert from the web TLS secret), and reverse-proxies /api/* to the
@@ -66,3 +67,4 @@ data:
         location = /healthz { return 200 "ok\n"; }
       }
     }
+{{- end }}

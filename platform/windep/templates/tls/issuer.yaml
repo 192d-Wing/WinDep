@@ -1,4 +1,4 @@
-{{- if .Values.certManager.enabled }}
+{{- if and .Values.certManager.enabled (eq .Values.tls.mode "certManager") }}
 {{- $iss := .Values.certManager.issuer }}
 # cert-manager ACME Issuer for the internal CA. Certs issued here MUST chain to the root
 # baked into boot.wim — point acme.server at your INTERNAL ACME directory (step-ca etc.),

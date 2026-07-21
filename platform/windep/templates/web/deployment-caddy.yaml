@@ -1,0 +1,92 @@
+{{- if eq .Values.tls.mode "caddyAcme" }}
+# WinDep deploy edge — Caddy (tls.mode=caddyAcme). Terminates public TLS via ACME
+# TLS-ALPN-01 (certmagic; HA via the shared windep-caddy-acme RWX PVC), serves the payload
+# tree from the PV, and reverse-proxies /api/* to windep-api (plaintext). Multi-replica
+# across nodes so the shared anycast VIP is HA.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: windep-web
+  namespace: {{ include "windep.namespace" . }}
+  labels:
+    {{- include "windep.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "windep.selectorLabels" (dict "ctx" $ "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "windep.selectorLabels" (dict "ctx" $ "component" "web") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/web/caddyfile-configmap.yaml") . | sha256sum }}
+    spec:
+      {{- include "windep.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000 # own the certmagic storage PVC so ACME can write acme.json
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: caddy
+          image: "{{ .Values.images.caddy.repo }}:{{ .Values.images.caddy.tag }}"
+          imagePullPolicy: {{ .Values.images.caddy.pullPolicy }}
+          args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            # Keep every writable path explicit so the rootfs can stay read-only.
+            - name: XDG_DATA_HOME
+              value: /data
+            - name: XDG_CONFIG_HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # TCP checks: an HTTPS GET would need a valid host/cert; a listen check is enough.
+          livenessProbe:
+            tcpSocket: { port: 8443 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket: { port: 8443 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - name: web-root
+              mountPath: /srv/windep
+              readOnly: true
+            - name: caddyfile
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+              readOnly: true
+            - name: ca-root
+              mountPath: /etc/caddy/ca
+              readOnly: true
+            - name: acme
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: web-root
+          persistentVolumeClaim:
+            claimName: windep-web-root
+        - name: caddyfile
+          configMap:
+            name: windep-web-caddy
+        - name: ca-root
+          secret:
+            secretName: {{ .Values.caddyAcme.caRootSecret }}
+        - name: acme
+          persistentVolumeClaim:
+            claimName: windep-caddy-acme
+        - name: tmp
+          emptyDir: {}
+{{- end }}
