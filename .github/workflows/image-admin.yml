@@ -36,7 +36,7 @@ jobs:
             runner: ubuntu-24.04-arm # native arm64 runner — no emulation
             base: registry1.dso.mil/ironbank/redhat/ubi/ubi10:10.2-arm64
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve image tag
         run: |
@@ -63,7 +63,7 @@ jobs:
           echo "::error::base pull failed after 5 attempts"; exit 1
 
       - name: Build (${{ matrix.arch }})
-        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2
+        uses: redhat-actions/buildah-build@27e5954dfd56a621f706827f2de689dc955e8711 # v3.0.1
         with:
           image: ${{ env.IMAGE }}
           tags: ${{ env.TAG }}-${{ matrix.arch }}
@@ -75,7 +75,7 @@ jobs:
             VERSION=${{ env.TAG }}
 
       - name: Push (${{ matrix.arch }}) to GHCR
-        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2
+        uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
         with:
           image: ${{ env.IMAGE }}
           tags: ${{ env.TAG }}-${{ matrix.arch }}
